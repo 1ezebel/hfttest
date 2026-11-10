@@ -51,6 +51,14 @@ class SimConfig:
     hold_ms: int = 5000       # сколько держим позицию
     maker_fee_bps: float = MAKER_FEE_BPS
     taker_fee_bps: float = TAKER_FEE_BPS
+    # Выход из позиции: "taker" = сразу по рынку; "maker" = сначала лимитной заявкой на
+    # противоположной стороне, а если за exit_ttl_ms не исполнили, то всё равно по рынку
+    exit_mode: str = "taker"
+    exit_ttl_ms: int = 3000
+
+    def __post_init__(self) -> None:
+        if self.exit_mode not in ("taker", "maker"):
+            raise ValueError(f"exit_mode: taker или maker, а не {self.exit_mode!r}")
 
 
 def simulate(b: pd.DataFrame, t: pd.DataFrame, side: np.ndarray, cfg: SimConfig = SimConfig()) -> dict[str, Any]:
@@ -69,13 +77,41 @@ def simulate(b: pd.DataFrame, t: pd.DataFrame, side: np.ndarray, cfg: SimConfig 
     def row_after(time_ms: float) -> int:
         return int(np.searchsorted(ts, time_ms, side="left"))
 
+    def crosses(o_side: int, price: float, j: int) -> bool:
+        """Post-only: заявка пересекла бы спред при стакане из строки j."""
+        return price >= ask[j] if o_side > 0 else price <= bid[j]
+
+    def passive_fill(o_side: int, price: float, j: int, t_active: float, t_cancel: float) -> float | None:
+        """Время исполнения лимитной заявки или None. Стакан на момент прихода: строка j.
+
+        Встаём в конец очереди; нас исполняют встречные агрессоры после того, как съедят
+        очередь перед нами, либо когда сделка прошла сквозь нашу цену.
+        """
+        if o_side > 0:
+            queue = 0.0 if price > bid[j] else bid_sz[j]
+        else:
+            queue = 0.0 if price < ask[j] else ask_sz[j]
+        lo = int(np.searchsorted(t_ts, t_active, side="right"))
+        hi = int(np.searchsorted(t_ts, t_cancel, side="right"))
+        for m in range(lo, hi):
+            if t_side[m] != -o_side:
+                continue
+            px = t_px[m]
+            if (px < price) if o_side > 0 else (px > price):
+                return float(t_ts[m])
+            if px == price:
+                queue -= t_sz[m]
+                if queue < 0:  # очередь перед нами съедена, остаток сделки достался нам
+                    return float(t_ts[m])
+        return None
+
     prev = np.roll(side, 1)
     prev[0] = 0
     new_seg = np.r_[True, seg[1:] != seg[:-1]]
     candidates = np.flatnonzero((side != 0) & ((side != prev) | new_seg))
 
     stats = {"signals": len(candidates), "orders": 0, "rejected": 0, "skipped_busy": 0,
-             "skipped_gap": 0, "fills": 0}
+             "skipped_gap": 0, "fills": 0, "maker_exits": 0}
     trades: list[dict[str, Any]] = []
     all_orders_markout: list[float] = []
     free_at = -math.inf  # момент, когда прошлая заявка/позиция закрыта
@@ -93,61 +129,71 @@ def simulate(b: pd.DataFrame, t: pd.DataFrame, side: np.ndarray, cfg: SimConfig 
             stats["skipped_gap"] += 1  # дыра в данных или конец записи: не знаем, что было
             continue
 
-        # Состояние стакана, когда заявка дошла до биржи
-        if (s > 0 and price >= ask[j]) or (s < 0 and price <= bid[j]):
-            stats["rejected"] += 1  # post-only: пересекла бы спред
+        if crosses(s, price, j):
+            stats["rejected"] += 1
             free_at = t_active + 1  # об отказе узнаём после момента прихода заявки
             continue
         stats["orders"] += 1
-        if s > 0:
-            queue = 0.0 if price > bid[j] else bid_sz[j]
-        else:
-            queue = 0.0 if price < ask[j] else ask_sz[j]
 
         # Куда ушла цена за время удержания, если бы нас исполнили сразу (для сравнения)
         k_all = row_after(t_active + cfg.hold_ms)
         if k_all < n and seg[k_all] == seg[i]:
             all_orders_markout.append(s * (mid[k_all] - price) / price * 1e4)
 
-        # Сделки, пока заявка стоит: нас исполняют встречные агрессоры
-        lo = int(np.searchsorted(t_ts, t_active, side="right"))
-        hi = int(np.searchsorted(t_ts, t_cancel, side="right"))
-        fill_ts = None
-        for m in range(lo, hi):
-            if t_side[m] != -s:
-                continue
-            px = t_px[m]
-            through = px < price if s > 0 else px > price
-            if through:
-                fill_ts = t_ts[m]
-                break
-            if px == price:
-                queue -= t_sz[m]
-                if queue < 0:  # очередь перед нами съедена, остаток сделки достался нам
-                    fill_ts = t_ts[m]
-                    break
+        fill_ts = passive_fill(s, price, j, t_active, t_cancel)
         if fill_ts is None:
             free_at = t_cancel + 1  # заявка снята только после момента отмены
             continue
 
-        # Выход по рынку через hold_ms (+ задержка): продаём в бид / покупаем по аску
-        t_exit = fill_ts + cfg.hold_ms + cfg.latency_ms
-        k = row_after(t_exit)
-        if k >= n or seg[k] != seg[i]:
+        # ---- выход ----
+        t_hold = fill_ts + cfg.hold_ms          # момент решения о выходе
+        k_mid = row_after(t_hold + cfg.latency_ms)
+        exit_px = exit_ts = None
+        exit_kind = "taker"
+        t_market = t_hold + cfg.latency_ms      # когда рыночная заявка дойдёт до биржи
+        gap = k_mid >= n or seg[k_mid] != seg[i]
+        if cfg.exit_mode == "maker" and not gap:
+            i2 = row_at(t_hold)
+            x_price = ask[i2] if s > 0 else bid[i2]   # выходим на противоположной стороне
+            x_active = t_hold + cfg.latency_ms
+            x_cancel = t_hold + cfg.exit_ttl_ms + cfg.latency_ms
+            j2 = row_at(x_active)
+            if seg[j2] != seg[i]:
+                gap = True
+            elif crosses(-s, x_price, j2):
+                # отказ: узнаём о нём после момента прихода заявки (+1 мс) и шлём рыночную
+                t_market = x_active + 1 + cfg.latency_ms
+            else:
+                x_fill = passive_fill(-s, x_price, j2, x_active, x_cancel)
+                if x_fill is not None:
+                    exit_px, exit_ts, exit_kind = float(x_price), x_fill, "maker"
+                else:
+                    # не дождались: заявка снята, узнаём об этом (+1 мс) и выходим по рынку
+                    t_market = x_cancel + 1 + cfg.latency_ms
+        if exit_px is None and not gap:
+            k = row_after(t_market)
+            if k >= n or seg[k] != seg[i]:
+                gap = True
+            else:  # по рынку: продаём в бид / покупаем по аску
+                exit_px, exit_ts = float(bid[k] if s > 0 else ask[k]), float(ts[k])
+        if gap:
             stats["skipped_gap"] += 1
             stats["orders"] -= 1
             free_at = t_cancel
             continue
-        exit_px = bid[k] if s > 0 else ask[k]
+
         gross = s * (exit_px - price) / price * 1e4
-        fees = cfg.maker_fee_bps + cfg.taker_fee_bps
+        fees = cfg.maker_fee_bps + (cfg.maker_fee_bps if exit_kind == "maker" else cfg.taker_fee_bps)
         stats["fills"] += 1
+        stats["maker_exits"] += exit_kind == "maker"
         trades.append({
             "t_signal": int(t0), "t_fill": int(fill_ts), "side": s, "entry": float(price),
-            "exit": float(exit_px), "gross_bps": float(gross), "net_bps": float(gross - fees),
-            "mid_markout_bps": float(s * (mid[k] - price) / price * 1e4),
+            "exit": exit_px, "exit_kind": exit_kind, "t_exit": int(exit_ts),
+            "gross_bps": float(gross), "net_bps": float(gross - fees), "fees_bps": float(fees),
+            "mid_markout_bps": float(s * (mid[k_mid] - price) / price * 1e4),
         })
-        free_at = ts[k]
+        # после пассивного выхода об исполнении узнаём уже после момента сделки
+        free_at = exit_ts + 1 if exit_kind == "maker" else exit_ts
 
     gross = np.array([x["gross_bps"] for x in trades])
     net = np.array([x["net_bps"] for x in trades])
@@ -159,7 +205,8 @@ def simulate(b: pd.DataFrame, t: pd.DataFrame, side: np.ndarray, cfg: SimConfig 
         "fill_rate": stats["fills"] / stats["orders"] if stats["orders"] else None,
         "mean_gross_bps": sg["mean"], "mean_net_bps": sn["mean"], "t_net": sn["t"],
         "sum_gross_bps": float(gross.sum()), "sum_net_bps": float(net.sum()),
-        "fees_bps": (cfg.maker_fee_bps + cfg.taker_fee_bps) * stats["fills"],
+        "fees_bps": float(sum(x["fees_bps"] for x in trades)),
+        "maker_exit_rate": stats["maker_exits"] / stats["fills"] if stats["fills"] else None,
         # adverse selection: второе число обычно заметно хуже первого
         "markout_all_orders_bps": all_mo["mean"], "markout_filled_bps": filled_mo["mean"],
         "trades": trades,
@@ -185,6 +232,9 @@ def main() -> int:
     ap.add_argument("--latency-ms", type=int, default=50)
     ap.add_argument("--ttl-ms", type=int, default=2000)
     ap.add_argument("--hold-ms", type=int, default=5000)
+    ap.add_argument("--exit", choices=["taker", "maker"], default="taker",
+                    help="выход: taker = по рынку, maker = сначала лимитной заявкой")
+    ap.add_argument("--exit-ttl-ms", type=int, default=3000, help="сколько ждать пассивного выхода")
     ap.add_argument("--chunks", type=int, default=4)
     ap.add_argument("--min-fills", type=int, default=20, help="минимум сделок на train для выбора параметров")
     ap.add_argument("--db", default="results/runs.sqlite")
@@ -192,9 +242,11 @@ def main() -> int:
     a = ap.parse_args()
 
     b, t = load(a.processed, a.inst), load(a.processed, a.inst, "trades")
-    cfg = SimConfig(latency_ms=a.latency_ms, ttl_ms=a.ttl_ms, hold_ms=a.hold_ms)
+    cfg = SimConfig(latency_ms=a.latency_ms, ttl_ms=a.ttl_ms, hold_ms=a.hold_ms,
+                    exit_mode=a.exit, exit_ttl_ms=a.exit_ttl_ms)
     spec = STRATEGIES[a.strategy]
-    name = f"{a.strategy}_maker"
+    # пассивный выход это отдельная гипотеза об исполнении, поэтому отдельная стратегия в журнале
+    name = f"{a.strategy}_maker" if a.exit == "taker" else f"{a.strategy}_maker_px"
     hours = (b["ts_ms"].iloc[-1] - b["ts_ms"].iloc[0]) / 3.6e6
     print(f"{a.inst}: {hours:.2f} ч, стратегия {name}, {json.dumps(asdict(cfg))}")
     if hours < 24:
@@ -202,7 +254,8 @@ def main() -> int:
 
     db = None if a.no_log else RunDB(a.db)
     if db:
-        db.ensure_strategy(name, hypothesis=spec["hypothesis"] + "; вход пассивный, выход по рынку")
+        db.ensure_strategy(name, hypothesis=spec["hypothesis"] + "; вход пассивный, выход "
+                           + ("по рынку" if a.exit == "taker" else "сначала пассивный, по таймауту по рынку"))
 
     def log(split: str, params: dict, m: dict, chunk: pd.DataFrame) -> None:
         if db is None or chunk.empty:
@@ -210,14 +263,14 @@ def main() -> int:
         metrics = {k: v for k, v in m.items() if k not in ("n", "score")}
         metrics.update(unit="bps", n_trades=m["fills"], pnl_gross=m["sum_gross_bps"],
                        pnl_net=m["sum_net_bps"], fees=m["fees_bps"],
-                       execution="maker entry (queue tail), taker exit", sim=asdict(cfg),
+                       execution=f"maker entry (queue tail), {a.exit} exit", sim=asdict(cfg),
                        hours=(chunk["ts_ms"].iloc[-1] - chunk["ts_ms"].iloc[0]) / 3.6e6)
         db.log_run(name, split=split, params=params, metrics=metrics,
                    data_from=_day(chunk["ts_ms"].iloc[0]), data_to=_day(chunk["ts_ms"].iloc[-1]),
                    instruments=[a.inst])
 
     print("\n  fold  params                               orders  fills  fill%  net_bps  t_net  "
-          "markout_all  markout_filled")
+          "markout_all  markout_filled  maker_exit%")
     for r in walk_forward(b, spec["fn"], spec["grid"], sim_scorer(t, cfg), a.chunks,
                           min_n=a.min_fills, on_result=log):
         if r["params"] is None:
@@ -227,8 +280,10 @@ def main() -> int:
         fr = "-" if m["fill_rate"] is None else f"{m['fill_rate'] * 100:.0f}"
         print(f"  {r['fold']:>4}  {str(r['params']):<36} {m['orders']:>6}  {m['fills']:>5}  {fr:>5}  "
               f"{_fmt(m['mean_net_bps'], 2):>7}  {_fmt(m['t_net'], 1):>5}  "
-              f"{_fmt(m['markout_all_orders_bps'], 2):>11}  {_fmt(m['markout_filled_bps'], 2):>14}")
-    print(f"\nnet_bps: средний результат сделки после комиссий ({MAKER_FEE_BPS} maker + {TAKER_FEE_BPS} taker).")
+              f"{_fmt(m['markout_all_orders_bps'], 2):>11}  {_fmt(m['markout_filled_bps'], 2):>14}  "
+              f"{'-' if m['maker_exit_rate'] is None else format(m['maker_exit_rate'] * 100, '.0f'):>11}")
+    print(f"\nnet_bps: средний результат сделки после комиссий (maker {MAKER_FEE_BPS}, taker {TAKER_FEE_BPS} б.п.).")
+    print("maker_exit%: доля сделок, где выход удался пассивно (иначе по таймауту вышли по рынку).")
     print("markout_all против markout_filled: если второе хуже, нас исполняют в плохие моменты (adverse selection).")
     if db:
         print(f"Всего вариантов в журнале по {name}: {db.count_runs(name)}")

@@ -131,6 +131,13 @@ class PaperGateway:
     def on_book(self, ts: float, bid: float, bid_sz: float, ask: float, ask_sz: float) -> None:
         self._advance(ts)
         self._book = (bid, bid_sz, ask, ask_sz)
+        self.fill_market(ts)
+
+    def fill_market(self, ts: float) -> None:
+        """Исполнить рыночные заявки, которые уже дошли до биржи, по текущему стакану."""
+        if self._book is None:
+            return
+        bid, _, ask, _ = self._book
         ready = [(e, o) for e, o in self._market if e <= ts]
         self._market = [(e, o) for e, o in self._market if e > ts]
         for _, o in ready:  # рыночная заявка: продаём в бид, покупаем по аску
@@ -160,22 +167,27 @@ class PaperTrader:
         self.stats = {"signals": 0, "orders": 0, "rejected": 0, "risk_rejected": 0, "skipped_busy": 0}
         self._n = 0
         self._kill_logged = False
-        self._mid = float("nan")
+        self._mid = self._bid = self._ask = float("nan")
         self._log = open(log_path, "a", encoding="utf-8") if log_path else None
 
     # ---------- события рынка ----------
 
     def on_trade(self, ts: float, px: float, sz: float, side: int) -> None:
-        self._fire_timers(ts)
+        self._fire_timers(ts, strict=True)
         self.gw.on_trade(ts, px, sz, side)
         self._drain()
 
     def on_book_row(self, ts: float, seg: int, bid: float, bid_sz: float, ask: float, ask_sz: float,
                     imb1: float, imb5: float, feed_delay_ms: float = 0.0) -> None:
-        self._fire_timers(ts)
+        # Порядок важен и совпадает с симулятором: таймер, сработавший ровно в момент этой
+        # строки стакана, уже видит её (как решение, принятое по свежим данным).
+        self._fire_timers(ts, strict=True)        # таймеры строго до этой строки
         self.gw.on_book(ts, bid, bid_sz, ask, ask_sz)
         self._drain()
-        self._mid = (bid + ask) / 2
+        self._bid, self._ask, self._mid = bid, ask, (bid + ask) / 2
+        self._fire_timers(ts, strict=False)       # таймеры ровно на этой строке
+        self.gw.fill_market(ts)
+        self._drain()
         if self.oms.check_loss_limit({self.inst: self._mid}, int(ts)) and not self._kill_logged:
             self._kill_logged = True
             self._write({"type": "kill", "ts": ts, "reason": self.oms.kill_reason})
@@ -217,46 +229,77 @@ class PaperTrader:
                            "imb1": a[:, 3], "imb5": a[:, 4]})
         return int(self.fn(df, **self.params)[-1])
 
-    def _fire_timers(self, ts: float) -> None:
+    def _fire_timers(self, ts: float, strict: bool) -> None:
+        """Выполнить таймеры до момента ts (strict: строго раньше ts, иначе включая ts)."""
         if not self.timers:
             return
         self.timers.sort(key=lambda x: x[0])
-        while self.timers and self.timers[0][0] <= ts:
+        while self.timers and (self.timers[0][0] < ts or (not strict and self.timers[0][0] == ts)):
             when, kind, cid = self.timers.pop(0)
+            e = self.entry
+            mine = e is not None and e["id"] == cid
             if kind == "cancel":
                 self.oms.cancel(cid, int(when))  # если уже исполнен, OMS просто ничего не сделает
-            elif kind == "exit" and self.entry and self.entry["id"] == cid:
-                self.oms.submit(cid + "-exit", self.inst, -self.entry["side"], self.qty, None,
-                                int(when), reduce_only=True)
+            elif kind == "exit" and mine:
+                if self.cfg.exit_mode == "maker":
+                    # пассивный выход: лимитная заявка на противоположной стороне стакана
+                    price = self._ask if e["side"] > 0 else self._bid
+                    self.oms.submit(cid + "-x", self.inst, -e["side"], self.qty, price, int(when),
+                                    reduce_only=True)
+                    e["state"] = "exiting"
+                    self.timers.append((when + self.cfg.exit_ttl_ms, "exit_cancel", cid))
+                    self.timers.sort(key=lambda x: x[0])
+                else:
+                    self._market_exit(e, when)
+            elif kind == "exit_cancel" and mine and e["state"] == "exiting":
+                self.oms.cancel(cid + "-x", int(when))
+
+    def _market_exit(self, e: dict, now: float) -> None:
+        self.oms.submit(e["id"] + "-exit", self.inst, -e["side"], self.qty, None, int(now), reduce_only=True)
+        e["state"] = "position"
+
+    def _close_trade(self, e: dict, ev: dict, exit_kind: str) -> None:
+        gross = e["side"] * (ev["px"] - e["price"]) / e["price"] * 1e4
+        fees = self.cfg.maker_fee_bps + (self.cfg.maker_fee_bps if exit_kind == "maker"
+                                         else self.cfg.taker_fee_bps)
+        tr = {"t_signal": int(e["t_signal"]), "t_fill": int(e["t_fill"]), "side": e["side"],
+              "by_kill": ev["id"].startswith("kill-"), "exit_kind": exit_kind, "t_exit": int(ev["ts"]),
+              "entry": float(e["price"]), "exit": float(ev["px"]),
+              "gross_bps": float(gross), "net_bps": float(gross - fees), "fees_bps": float(fees)}
+        self.trades.append(tr)
+        self._write({"type": "trade", **tr})
+        self.entry = None
+        # о пассивном исполнении узнаём уже после момента сделки
+        self.free_at = ev["ts"] + 1 if exit_kind == "maker" else ev["ts"]
 
     def _drain(self) -> None:
-        for ev in self.gw.events:
+        events, self.gw.events = self.gw.events, []
+        for ev in events:
             self._write(ev)
             e = self.entry
             if e is None:
                 continue
-            if ev["type"] == "ack" and ev["id"] == e["id"]:
-                self.stats["orders"] += 1
-            elif ev["type"] == "rejected" and ev["id"] == e["id"]:
-                self.stats["rejected"] += 1
-                self.entry, self.free_at = None, ev["ts"] + 1
-            elif ev["type"] == "canceled" and ev["id"] == e["id"]:
-                self.entry, self.free_at = None, ev["ts"] + 1
-            elif ev["type"] == "fill" and ev["id"] == e["id"]:
-                e["state"], e["t_fill"] = "position", ev["ts"]
-                self.timers.append((ev["ts"] + self.cfg.hold_ms, "exit", e["id"]))
-            elif ev["type"] == "exit" and e["state"] == "position":
-                # обычный выход по таймеру или аварийный выход от kill switch
-                gross = e["side"] * (ev["px"] - e["price"]) / e["price"] * 1e4
-                fees = self.cfg.maker_fee_bps + self.cfg.taker_fee_bps
-                tr = {"t_signal": int(e["t_signal"]), "t_fill": int(e["t_fill"]), "side": e["side"],
-                      "by_kill": ev["id"].startswith("kill-"),
-                      "entry": float(e["price"]), "exit": float(ev["px"]),
-                      "gross_bps": float(gross), "net_bps": float(gross - fees)}
-                self.trades.append(tr)
-                self._write({"type": "trade", **tr})
-                self.entry, self.free_at = None, ev["ts"]
-        self.gw.events.clear()
+            kind, cid = ev["type"], ev["id"]
+            if cid == e["id"]:                       # заявка на вход
+                if kind == "ack":
+                    self.stats["orders"] += 1
+                elif kind == "rejected":
+                    self.stats["rejected"] += 1
+                    self.entry, self.free_at = None, ev["ts"] + 1
+                elif kind == "canceled":
+                    self.entry, self.free_at = None, ev["ts"] + 1
+                elif kind == "fill":
+                    e["state"], e["t_fill"] = "position", ev["ts"]
+                    self.timers.append((ev["ts"] + self.cfg.hold_ms, "exit", e["id"]))
+            elif cid == e["id"] + "-x":              # пассивная заявка на выход
+                if kind == "fill":
+                    self._close_trade(e, ev, "maker")
+                elif kind in ("rejected", "canceled"):
+                    # не получилось пассивно: узнали об этом (+1 мс) и выходим по рынку
+                    self._market_exit(e, ev["ts"] + 1)
+            elif kind == "exit" and e["state"] in ("position", "exiting"):
+                # рыночный выход: по таймеру, запасной после пассивного или от kill switch
+                self._close_trade(e, ev, "taker")
 
     def _write(self, ev: dict) -> None:
         if self._log:
@@ -272,7 +315,8 @@ class PaperTrader:
             "fill_rate": n / self.stats["orders"] if self.stats["orders"] else None,
             "mean_gross_bps": summarize(gross)["mean"], "mean_net_bps": s["mean"], "t_net": s["t"],
             "sum_gross_bps": float(gross.sum()), "sum_net_bps": float(net.sum()),
-            "fees_bps": (self.cfg.maker_fee_bps + self.cfg.taker_fee_bps) * n,
+            "fees_bps": float(sum(t["fees_bps"] for t in self.trades)),
+            "maker_exits": sum(1 for t in self.trades if t["exit_kind"] == "maker"),
             "pnl_quote": self.oms.pnl({self.inst: self._mid}) if n else 0.0,
             "killed": self.oms.killed, "anomalies": len(self.oms.anomalies),
             "open_at_end": self.entry is not None,
@@ -376,13 +420,17 @@ def main() -> int:
     ap.add_argument("--latency-ms", type=int, default=50)
     ap.add_argument("--ttl-ms", type=int, default=2000)
     ap.add_argument("--hold-ms", type=int, default=5000)
+    ap.add_argument("--exit", choices=["taker", "maker"], default="taker",
+                    help="выход: taker = по рынку, maker = сначала лимитной заявкой")
+    ap.add_argument("--exit-ttl-ms", type=int, default=3000)
     ap.add_argument("--qty", type=float, default=0.01, help="размер заявки в базовой монете")
     ap.add_argument("--db", default="results/runs.sqlite")
     ap.add_argument("--no-log", action="store_true")
     a = ap.parse_args()
 
     params = json.loads(a.params)
-    cfg = SimConfig(latency_ms=a.latency_ms, ttl_ms=a.ttl_ms, hold_ms=a.hold_ms)
+    cfg = SimConfig(latency_ms=a.latency_ms, ttl_ms=a.ttl_ms, hold_ms=a.hold_ms,
+                    exit_mode=a.exit, exit_ttl_ms=a.exit_ttl_ms)
     started = pd.Timestamp.now(tz="UTC")
     log_path = None
     if not a.no_log:
@@ -411,7 +459,7 @@ def main() -> int:
         print("   аномалии:", trader.oms.anomalies[:5])
 
     if not a.no_log:
-        name = f"{a.strategy}_paper"
+        name = f"{a.strategy}_paper" if a.exit == "taker" else f"{a.strategy}_paper_px"
         ended = pd.Timestamp.now(tz="UTC")
         with RunDB(a.db) as db:
             db.ensure_strategy(name, hypothesis=STRATEGIES[a.strategy]["hypothesis"]

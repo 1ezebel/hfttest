@@ -32,18 +32,26 @@ def market(n=6000, seed=3):
     return b, t
 
 
-KEYS = ("t_signal", "t_fill", "side", "entry", "exit", "gross_bps", "net_bps")
+KEYS = ("t_signal", "t_fill", "side", "entry", "exit", "exit_kind", "t_exit", "gross_bps", "net_bps")
+CFG_PX = SimConfig(latency_ms=50, ttl_ms=700, hold_ms=1500, exit_mode="maker", exit_ttl_ms=900)
+# без задержки все события попадают ровно на границы строк: самая строгая проверка порядка
+CFG_PX0 = SimConfig(latency_ms=0, ttl_ms=700, hold_ms=1500, exit_mode="maker", exit_ttl_ms=900)
 
 
-@pytest.mark.parametrize("name,fn,params", [
-    ("micro_drift", sig_micro_drift, {"imb_entry": 0.6, "depth": 1}),
-    ("mr_ema", sig_mr_ema, {"halflife_s": 1.0, "z_entry": 1.5}),
+@pytest.mark.parametrize("name,fn,params,cfg", [
+    ("micro_drift", sig_micro_drift, {"imb_entry": 0.6, "depth": 1}, CFG),
+    ("mr_ema", sig_mr_ema, {"halflife_s": 1.0, "z_entry": 1.5}, CFG),
+    ("micro_drift", sig_micro_drift, {"imb_entry": 0.6, "depth": 1}, CFG_PX),
+    ("mr_ema", sig_mr_ema, {"halflife_s": 1.0, "z_entry": 1.5}, CFG_PX),
+    ("micro_drift", sig_micro_drift, {"imb_entry": 0.6, "depth": 1}, CFG_PX0),
+    ("micro_drift", sig_micro_drift, {"imb_entry": 0.6, "depth": 1},
+     SimConfig(latency_ms=0, ttl_ms=700, hold_ms=1500)),
 ])
-def test_paper_replay_matches_simulator(name, fn, params):
+def test_paper_replay_matches_simulator(name, fn, params, cfg):
     """Два независимых кода (пакетный и событийный) обязаны дать одни и те же сделки."""
     b, t = market()
-    sim = simulate(b, t, fn(b, **params), CFG)
-    trader = PaperTrader("X", name, params, CFG)
+    sim = simulate(b, t, fn(b, **params), cfg)
+    trader = PaperTrader("X", name, params, cfg)
     replay(trader, b, t)
     assert len(sim["trades"]) >= 10                       # тест не пустой
     got = [{k: tr[k] for k in KEYS} for tr in trader.trades]
@@ -52,6 +60,10 @@ def test_paper_replay_matches_simulator(name, fn, params):
     for g, w in zip(got, want):
         assert g == pytest.approx(w)
     s = trader.summary()
+    if cfg.exit_mode == "maker":   # в тесте должны встретиться оба исхода пассивного выхода
+        kinds = {tr["exit_kind"] for tr in sim["trades"]}
+        assert kinds == {"maker", "taker"}
+        assert s["maker_exits"] == sim["maker_exits"]
     assert s["rejected"] == sim["rejected"] and s["anomalies"] == 0
     assert all(o.state in (OState.FILLED, OState.CANCELED, OState.REJECTED)
                for o in list(trader.oms.orders.values())[:-2])

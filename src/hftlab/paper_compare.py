@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -44,8 +45,7 @@ def compare(log: dict[str, Any], b, t, strategy: str, params: dict, cfg: SimConf
         return {"error": "в логе нет ни одной заявки"}
     delay = statistics.median(s.get("feed_delay_ms", 0.0) for s in log["submits"])
     t_lo, t_hi = log["submits"][0]["ts"], log["submits"][-1]["ts"]
-    sim_cfg = SimConfig(latency_ms=cfg.latency_ms + round(delay), ttl_ms=cfg.ttl_ms, hold_ms=cfg.hold_ms,
-                        maker_fee_bps=cfg.maker_fee_bps, taker_fee_bps=cfg.taker_fee_bps)
+    sim_cfg = replace(cfg, latency_ms=cfg.latency_ms + round(delay))
     sim = simulate(b, t, STRATEGIES[strategy]["fn"](b, **params), sim_cfg)
     sim_trades = {x["t_signal"]: x for x in sim["trades"] if t_lo <= x["t_signal"] <= t_hi}
     paper_trades = {x["t_signal"]: x for x in log["trades"]}

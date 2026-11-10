@@ -85,3 +85,45 @@ def test_gap_in_data_skips_order():
     seg = np.r_[np.ones(10, dtype=int), np.full(50, 2)]   # дыра внутри окна заявки
     r = simulate(book(seg=seg), trades([(700, 99.9, 1.0, -1)]), buy_signal(), CFG)
     assert (r["orders"], r["fills"], r["skipped_gap"]) == (0, 0, 1)
+
+
+PX = SimConfig(latency_ms=100, ttl_ms=1000, hold_ms=1000, maker_fee_bps=2.0, taker_fee_bps=5.0,
+               exit_mode="maker", exit_ttl_ms=1000)
+ENTRY = (700, 99.9, 1.0, -1)   # продажа сквозь наш бид: вход в 700 мс по 100.0
+
+
+def test_maker_exit_fills_at_ask_and_pays_two_maker_fees():
+    # решение о выходе в 1700, заявка на продажу по аску 100.1 активна с 1800;
+    # покупатель проходит сквозь неё в 2000
+    r = simulate(book(), trades([ENTRY, (2000, 100.2, 1.0, 1)]), buy_signal(), PX)
+    tr = r["trades"][0]
+    assert (tr["exit_kind"], tr["exit"], tr["t_exit"]) == ("maker", 100.1, 2000)
+    assert tr["gross_bps"] == pytest.approx(10.0, rel=1e-3)      # забрали спред: 100.0 -> 100.1
+    assert tr["net_bps"] == pytest.approx(10.0 - 4.0, rel=1e-3)  # две maker-комиссии
+    assert r["maker_exit_rate"] == 1.0
+
+
+def test_maker_exit_waits_in_queue_then_falls_back_to_market():
+    # на аске очередь 10; купили только 4: нас не исполнили, по таймауту выходим по рынку в бид
+    r = simulate(book(), trades([ENTRY, (2000, 100.1, 4.0, 1)]), buy_signal(), PX)
+    tr = r["trades"][0]
+    assert tr["exit_kind"] == "taker" and tr["exit"] == 100.0
+    assert tr["net_bps"] == pytest.approx(-7.0)
+    assert tr["t_exit"] == 3000        # 1700 + ожидание 1000 + отмена 100 + узнали + заявка 100
+    # очередь съедена полностью: исполнили пассивно
+    r = simulate(book(), trades([ENTRY, (2000, 100.1, 4.0, 1), (2100, 100.1, 7.0, 1)]), buy_signal(), PX)
+    assert r["trades"][0]["exit_kind"] == "maker"
+
+
+def test_maker_exit_rejected_when_market_moved_through():
+    b = book()
+    b.loc[18:, ["bid", "ask"]] = [100.2, 100.3]   # к приходу заявки бид уже выше нашей цены 100.1
+    b["mid"] = (b["bid"] + b["ask"]) / 2
+    r = simulate(b, trades([ENTRY]), buy_signal(), PX)
+    tr = r["trades"][0]
+    assert tr["exit_kind"] == "taker" and tr["exit"] == 100.2   # отказ post-only, вышли по рынку выше
+
+
+def test_bad_exit_mode_rejected():
+    with pytest.raises(ValueError):
+        SimConfig(exit_mode="limit")
