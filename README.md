@@ -12,7 +12,7 @@
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest                 # должно быть 56 passed
+python -m pytest                 # должно быть 64 passed
 ```
 
 ## Первый запуск рекордера (делается руками, один раз)
@@ -64,7 +64,7 @@ src/hftlab/paper.py          бумажная торговля
 src/hftlab/paper_compare.py  paper против симулятора
 src/hftlab/runs.py           журнал бэктестов (SQLite)
 src/hftlab/vault_export.py   экспорт журнала в Obsidian
-tests/                       56 тестов
+tests/                       64 теста
 data/                        сырая запись (в git не попадает)
 processed/                   таблицы с признаками (в git не попадают, пересчитываются)
 results/                     журнал и логи paper (в git не попадают, бэкапить)
