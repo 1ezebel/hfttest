@@ -1,7 +1,8 @@
 # hft-lab
 
 Учебная лаборатория для микроструктурной стратегии (mean reversion) на крипто-фьючерсах OKX.
-Сейчас готов этап 0: запись данных, локальный стакан и проверка записи. Торговли здесь нет.
+Готов код этапов 0-5: запись данных, признаки, проверка сигналов, симулятор исполнения, учёт ордеров
+с лимитами риска и бумажная торговля. Реальной торговли здесь нет, ключи API не нужны.
 
 Для работы с Claude Code: откройте эту папку и запустите `claude`. Он прочитает `CLAUDE.md` и продолжит с нужного места.
 Установка Claude Code: [официальная инструкция](https://code.claude.com/docs/en/quickstart).
@@ -11,7 +12,7 @@
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest                 # должно быть 22 passed
+python -m pytest                 # должно быть 54 passed
 ```
 
 ## Первый запуск рекордера (делается руками, один раз)
@@ -28,24 +29,44 @@ python -m hftlab.check_recording data
 - `crossed books: 0`;
 - задержка `recv-ts` порядка десятков миллисекунд; отрицательная значит расхождение часов (проверьте синхронизацию времени).
 
-Если подключение не открывается, возможно, OKX недоступен с вашего IP или из вашей сети: это надо выяснить сразу,
+Если порт 8443 закрыт вашей сетью, добавьте `--url wss://ws.okx.com:443/ws/v5/public`.
+Если подключение не открывается совсем, возможно, OKX недоступен с вашего IP или из вашей сети: это надо выяснить сразу,
 а запасной вариант (Gate) потребует переписать подключение и разбор стакана.
+
+## Полный цикл (когда есть запись)
+```
+python -m hftlab.features data --out processed           # 1. сырьё -> таблицы с признаками
+python -m hftlab.research processed --strategy mr_ema    # 2. есть ли у сигнала предсказательная сила
+python -m hftlab.sim processed --strategy mr_ema         # 3. выживает ли он при пассивном исполнении
+python -m hftlab.paper --strategy mr_ema --params '{"halflife_s": 5, "z_entry": 2}' --minutes 60   # 4. вживую, без денег
+python -m hftlab.paper_compare results/paper/<файл>.jsonl   # 5. совпал ли paper с симулятором
+```
+Шаги 2-4 сами пишут результаты в журнал `results/runs.sqlite`.
+Долгая запись на VPS или ноутбуке: `deploy/README.md`.
 
 ## Структура
 ```
 CLAUDE.md                    контекст и правила для Claude Code
-docs/ROADMAP.md             этапы с критериями выхода
-docs/GLOSSARY.md            термины из ваших списков по приоритету
-docs/source/                исходный список терминов, как был
-src/hftlab/okx_book.py      стакан, microprice, imbalance
-src/hftlab/storage.py       запись и чтение gzip по часам
-src/hftlab/recorder.py      WebSocket-рекордер
+docs/ROADMAP.md              этапы с критериями выхода
+docs/GLOSSARY.md             термины по приоритету
+deploy/                      автозапуск рекордера (systemd, .bat)
+src/hftlab/okx_book.py       стакан, microprice, imbalance
+src/hftlab/storage.py        запись и чтение gzip по часам
+src/hftlab/recorder.py       WebSocket-рекордер с аудитом стакана
 src/hftlab/check_recording.py  отчёт по записи
-src/hftlab/runs.py          журнал бэктестов (SQLite)
-src/hftlab/vault_export.py  экспорт журнала в Obsidian
-results/                    runs.sqlite (в git не попадает)
-tests/                      тесты на синтетических данных
-data/                       записанные данные (в git не попадают)
+src/hftlab/health.py         жива ли запись
+src/hftlab/features.py       признаки -> parquet
+src/hftlab/research.py       сигналы, markout, walk-forward
+src/hftlab/sim.py            симулятор пассивного исполнения
+src/hftlab/oms.py            ордера, лимиты риска, kill switch
+src/hftlab/paper.py          бумажная торговля
+src/hftlab/paper_compare.py  paper против симулятора
+src/hftlab/runs.py           журнал бэктестов (SQLite)
+src/hftlab/vault_export.py   экспорт журнала в Obsidian
+tests/                       54 теста
+data/                        сырая запись (в git не попадает)
+processed/                   таблицы с признаками (в git не попадают, пересчитываются)
+results/                     журнал и логи paper (в git не попадают, бэкапить)
 ```
 
 ## Журнал бэктестов и Obsidian

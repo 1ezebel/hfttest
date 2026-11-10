@@ -26,22 +26,45 @@
    `count_runs`: сколько вариантов уже перепробовали. Подозрительно хороший результат: статус `suspect`.
 7. Spoofing/layering и манипуляции рынком не писать и не обсуждать как стратегию.
 
-## Текущее состояние (этап 0 готов, этап 1 не начат)
-Готово и покрыто тестами (22 шт., `python -m pytest`):
-- `src/hftlab/okx_book.py`: локальный стакан OKX, проверка цепочки seqId/prevSeqId, microprice, imbalance.
-- `src/hftlab/storage.py`: запись сырых сообщений в gzip по часам (UTC), чтение с терпимостью к оборванному хвосту.
-- `src/hftlab/check_recording.py`: повторный проход записи через стакан, отчёт (пропуски, crossed, задержка recv-ts).
-- `src/hftlab/runs.py`: журнал бэктестов в SQLite (`results/runs.sqlite`): стратегии, прогоны, git commit.
-- `src/hftlab/vault_export.py`: экспорт журнала в Obsidian пользователя (заметки, панели Bases, шаблон дневника).
-  Ручной текст ниже маркера `AUTO:END` сохраняется, файлы не удаляются. Путь к хранилищу спросить у пользователя.
-- `src/hftlab/recorder.py`: WebSocket-рекордер books+trades. **Не проверен на живой бирже** (разработка шла
-  без сети). Первый шаг: запустить руками, посмотреть лог и результат `check_recording`, починить расхождения.
+## Текущее состояние (код этапов 0-5 готов, данных пока мало)
+Покрыто тестами (54 шт., `python -m pytest`). Этап 0 закрыт на живой бирже 10.11.2026:
+пропусков 0, crossed 0, независимый аудит стакана совпал уровень в уровень.
+
+Данные:
+- `okx_book.py`: локальный стакан OKX, цепочка seqId/prevSeqId, microprice, imbalance.
+- `storage.py`: сырые сообщения в gzip по часам (UTC), чтение с терпимостью к оборванному хвосту.
+- `recorder.py`: рекордер books+trades. Раз в 6 часов пересоздаёт подписку (`#RESUB`), раз в 30 минут
+  берёт независимый snapshot вторым соединением (`#AUDIT`). Проверен на живой бирже.
+- `check_recording.py`: повторный проход записи: пропуски, crossed, задержка, точная сверка с `#AUDIT`.
+- `health.py`: "жива ли запись" для cron/планировщика. `deploy/`: systemd-юнит и .bat для автозапуска.
+
+Исследование:
+- `features.py`: сырьё -> parquet (`processed/`): mid, microprice, imb1/imb5, OFI, объёмы сделок, `seg`.
+- `research.py`: сигналы (`mr_ema`, `micro_drift`), markout, издержки taker, walk-forward, контроль lag1.
+- `sim.py`: симулятор пассивного исполнения (конец очереди, задержка, post-only, выход по рынку).
+- `runs.py` + `vault_export.py`: журнал бэктестов в SQLite и выгрузка в Obsidian.
+
+Исполнение (без реальных денег):
+- `oms.py`: автомат состояний ордера, идемпотентность, гонка fill/cancel, сверка, лимиты, kill switch.
+- `paper.py`: бумажная торговля на живом потоке или на записи. На записи обязана совпадать с `sim.py`
+  сделка в сделку (тест `test_paper_replay_matches_simulator`): если тест упал, один из двух врёт.
+- `paper_compare.py`: сравнение paper-сессии с симулятором на тех же данных.
+
+Чего НЕТ и что нельзя утверждать:
+- Выводов о стратегиях нет: записано меньше суток. Все прогоны в журнале пока проверяют код, а не идею.
+  Первые цифры: предсказательная сила есть (перекос стакана даёт ~0.7 б.п. за 1 с), но издержки
+  (7-10 б.п. на круг) съедают её целиком. Это ожидаемо и согласуется с литературой.
+- Настоящего шлюза к бирже нет и быть не должно до закрытия этапа 5 (2 недели paper).
+- Комиссии в `research.py` (maker 2 / taker 5 б.п.) это базовый тариф; тариф пользователя не проверен.
 
 ## Факты про OKX, на которые опирается код (проверять при сомнениях)
-- Публичный WS: `wss://ws.okx.com:8443/ws/v5/public`, каналы `books` (400 уровней, snapshot, затем updates) и `trades`.
+- Публичный WS: `wss://ws.okx.com:8443/ws/v5/public` (тот же сервер отвечает на порту 443: `--url wss://ws.okx.com:443/ws/v5/public`,
+  нужно, если сеть режет 8443), каналы `books` (400 уровней, snapshot, затем updates) и `trades`.
 - **Поле `checksum` в `books` отключено** (в продакшене с 23.06.2026 всегда 0). Целостность = `prevSeqId == прошлый seqId`.
   `books5` и `bbo-tbt` checksum не имели вообще.
 - Для `books`: snapshot имеет `prevSeqId = -1`; `size == "0"` удаляет уровень; пустой update при `prevSeqId == seqId` это heartbeat.
+- Проверено на живых данных: сообщения `books` идут раз в ~100 мс; у сделок (`trades`) тоже есть `seqId`
+  из той же последовательности; спред BTC-USDT-SWAP почти всегда 1 тик (0.1 = 0.014 б.п.).
 - Keep-alive: клиент шлёт строку `ping`, сервер отвечает `pong`; без трафика ~30 с соединение рвётся.
 - Подтверждение на gap/reset: пересоздать подписку (unsubscribe + subscribe) и ждать нового snapshot.
   Точная семантика `seqId < prevSeqId` (сброс при обслуживании) в коде обработана консервативно (как gap), стоит
@@ -51,16 +74,28 @@
 ```
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest                                         # тесты
-python -m hftlab.recorder --inst BTC-USDT-SWAP --out data
+python -m pytest                                         # тесты (54)
+python -m hftlab.recorder --out data                     # запись BTC+ETH (Ctrl+C для остановки)
 python -m hftlab.check_recording data                    # отчёт по записи
+python -m hftlab.health data                             # жива ли запись (код возврата 1 = проблема)
+python -m hftlab.features data --out processed           # сырьё -> parquet с признаками
+python -m hftlab.research processed --strategy mr_ema    # markout + walk-forward, пишет в журнал
+python -m hftlab.sim processed --strategy mr_ema         # симулятор исполнения, пишет в журнал
+python -m hftlab.paper --strategy mr_ema --params '{"halflife_s": 5, "z_entry": 2}' --minutes 60
+python -m hftlab.paper_compare results/paper/<файл>.jsonl
 python -m hftlab.vault_export --vault "<путь к хранилищу Obsidian>/hft-lab"   # журнал -> Obsidian
 ```
+`--no-log` у research/sim/paper отключает запись в журнал: только для отладки кода, не для проверки идей.
 
 ## Что делать дальше (в таком порядке)
-1. Первый живой запуск рекордера на 10–15 минут, разбор лога, `check_recording`. Исправить найденное.
-2. Запустить запись надолго (VPS или ноутбук), цель: 7+ дней непрерывных данных, потом 30.
-3. Дальше см. `docs/ROADMAP.md`. Термины и приоритеты: `docs/GLOSSARY.md`.
+1. Запустить рекордер надолго на машине пользователя (`deploy/README.md`), цель 7+ дней, потом 30.
+   Раз в день: `check_recording` (audit BAD должен быть 0) и `health`.
+2. Когда наберётся 7 дней: `features`, затем `research` и `sim` по обеим стратегиям и обоим инструментам.
+   Смотреть walk-forward на test, колонку lag1 и число вариантов в журнале. Выгрузить в Obsidian.
+3. Если после комиссий в симуляторе ничего не выживает (самый вероятный исход): новая гипотеза,
+   этап 2 заново. Идеи: фильтр по волатильности/спреду, ETH вместо BTC (тик крупнее относительно цены),
+   выход пассивной заявкой вместо рыночной, OFI как сигнал.
+4. Только выжившее в симуляторе идёт в paper на 2 недели, с ежедневным `paper_compare`.
 
 ## Учёт в Obsidian
 Obsidian ведётся локально у пользователя. Источник правды: `results/runs.sqlite`, Obsidian только витрина.

@@ -391,6 +391,9 @@ def main() -> int:
     trader = PaperTrader(a.inst, a.strategy, params, cfg, qty=a.qty, log_path=log_path)
 
     mode = "replay" if a.replay else "live"
+    # Заголовок лога: по нему paper_compare восстановит настройки
+    trader._write({"type": "start", "inst": a.inst, "strategy": a.strategy, "params": params,
+                   "cfg": asdict(cfg), "mode": mode})
     print(f"paper ({mode}): {a.inst} {a.strategy} {params} {json.dumps(asdict(cfg))}")
     if a.replay:
         from hftlab.features import load

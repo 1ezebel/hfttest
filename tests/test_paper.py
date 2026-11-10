@@ -70,3 +70,19 @@ def test_loss_limit_stops_trading_and_log_is_written(tmp_path):
     assert abs(trader.oms.position.get("X", 0.0)) < 1e-12      # позиция закрыта
     types = [json.loads(line)["type"] for line in log.read_text(encoding="utf-8").splitlines()]
     assert "submit" in types and "kill" in types and types.count("kill") == 1
+
+
+def test_paper_compare_on_replay_matches_fully(tmp_path):
+    from hftlab.paper_compare import compare, read_log
+    b, t = market(4000)
+    params = {"imb_entry": 0.6, "depth": 1}
+    log = tmp_path / "p.jsonl"
+    trader = PaperTrader("X", "micro_drift", params, CFG, log_path=log)
+    replay(trader, b, t)
+    trader.close()
+    r = compare(read_log(log), b, t, "micro_drift", params, CFG)
+    assert r["paper_trades"] >= 5
+    assert r["matched"] == r["paper_trades"] == r["same_fill_time"]
+    assert r["matched_mean_abs_diff_bps"] == pytest.approx(0.0)
+    # симулятор может знать ещё одну сделку после последней заявки paper, не больше
+    assert r["only_paper"] == [] and len(r["only_sim"]) <= 1
