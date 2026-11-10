@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+*.key
+
+# Записанные рыночные данные не коммитим
+data/*
+!data/.gitkeep
+
+# Журнал бэктестов (SQLite) локальный; бэкапить отдельно
+results/

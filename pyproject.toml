@@ -1,0 +1,13 @@
+[project]
+name = "hftlab"
+version = "0.1.0"
+description = "Учебная лаборатория: запись рыночных данных OKX, стакан, исследование mean reversion"
+requires-python = ">=3.11"
+dependencies = ["websockets>=13"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

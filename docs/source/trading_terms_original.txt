@@ -1,0 +1,179 @@
+Ну вы сами попросили:
+а теперь давай ещё для трейдинга список. Вот именно для HFT mean reversion моделей.
+Чтобы прямо совсем от жизни охуели
+Стакан заявок (Limit Order Book, LOB)
+Matching Engine
+Price-Time Priority
+Pro-Rata Matching
+FIFO и альтернативные правила матчивания
+Bid, Ask и Mid Price
+Bid-Ask Spread
+Tick Size
+Lot Size
+Глубина рынка (Market Depth)
+Ликвидность
+Скрытая ликвидность
+Iceberg-заявки
+Queue Position
+Queue Dynamics
+Order Book Imbalance
+Microprice
+Order Flow
+Trade Flow
+Signed Volume
+Агрессивные и пассивные заявки
+Maker/Taker
+Rebates и комиссии
+Adverse Selection
+Toxic Flow
+Price Impact
+Market Impact
+Slippage
+Fill Probability
+Partial Fills
+Cancel-to-Trade Ratio
+Order-to-Trade Ratio
+Self-Trading
+Locked и Crossed Markets
+Fragmentation ликвидности
+Консолидированный и локальный стакан
+Lead-Lag между площадками
+Price Discovery
+Latency Arbitrage
+Last Look — где применимо
+Аукционы открытия и закрытия
+Volatility Auctions
+Trading Halts
+Limit Up/Limit Down
+Правила конкретной биржи
+Level 1, Level 2 и Level 3 данные
+Market-by-Price и Market-by-Order
+Инкрементальные и snapshot-фиды
+Sequence Numbers
+Gap Detection и восстановление фида
+Биржевые timestamps
+Exchange Time vs Receive Time
+Normalization рыночных данных
+Corporate Actions
+Symbol Mapping
+Instrument Reference Data
+Торговые календари
+Сессии и фазы торгов
+Roll фьючерсных контрактов
+Continuous Futures
+Очистка ошибочных тиков
+Out-of-Order Events
+Дедупликация сделок и котировок
+NBBO или его локальные аналоги
+SIP vs Direct Feeds
+Feed Arbitration
+Stale Quotes
+Cross-Venue Data Alignment
+Заявки и исполнение
+Market Orders
+Limit Orders
+Stop Orders
+IOC
+FOK
+GTC, GTD и Day Orders
+Post-Only
+Reduce-Only
+Pegged Orders
+Midpoint Orders
+Hidden Orders
+Cancel/Replace
+Mass Cancel
+Self-Trade Prevention
+Order Acknowledgement
+Reject Codes
+Execution Reports
+Drop Copy
+Pre-Trade Risk Checks
+Smart Order Routing
+Venue Selection
+Order Splitting
+Child Orders
+Execution Scheduling
+Queue-Aware Execution
+Управление потерянными и неопределёнными заявками
+Состояние заявки как конечный автомат
+Race между fill и cancel
+Duplicate и late fills
+Reconciliation позиций и сделок
+HFT-стратегии
+Маркет-мейкинг
+Управление спредом
+Управление инвентарём
+Reservation Price
+Inventory Skew
+Quote Skew
+Dynamic Widening
+Statistical Arbitrage
+Cross-Venue Arbitrage
+Cash-and-Carry
+Basis Trading
+Calendar Spreads
+Index Arbitrage
+ETF Arbitrage
+Futures-Spot Arbitrage
+Triangular Arbitrage
+Lead-Lag Trading
+Order Flow Prediction
+Short-Term Alpha
+Liquidity Provision
+Liquidity Taking
+Rebate Capture
+Auction Trading
+Relative-Value Trading
+Pairs Trading
+Event-Driven HFT
+Volatility Trading
+Options Market Making
+Delta Hedging
+Gamma Scalping
+Сигналы и модели
+Returns на разных горизонтах
+Mid-Price Returns
+Microprice Signals
+Order Book Imbalance
+Trade Imbalance
+Queue Imbalance
+Order Flow Imbalance
+Momentum
+Mean Reversion
+Short-Term Reversal
+Lead-Lag Signals
+Cross-Asset Signals
+Cross-Venue Signals
+Volatility Estimation
+Realized Volatility
+Arrival Rates заявок
+Cancellation Intensity
+Hawkes Processes
+Probability of Fill
+Probability of Adverse Move
+Expected Markout
+Expected Value после комиссий
+Signal Decay
+Half-Life сигнала
+Feature Leakage
+Regime Detection
+Online Learning
+Concept Drift
+Калибровка вероятностей
+Статистика и исследование
+Математическое ожидание
+Дисперсия и ковариация
+Корреляция и ложная корреляция
+Условная вероятность
+Байесовское обновление
+Проверка гипотез
+Доверительные интервалы
+Multiple Testing
+Data Snooping
+Selection Bias
+Survivorship Bias
+Look-Ahead Bias
+Overfitting
+Backtest Overfitting
+P-Hacking
