@@ -12,7 +12,7 @@
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt  # ставит зависимости и сам проект (папку src)
-python -m pytest                 # должно быть 65 passed
+python -m pytest                 # должно быть 67 passed
 ```
 
 ## Первый запуск рекордера (делается руками, один раз)
@@ -27,7 +27,8 @@ python -m hftlab.check_recording data
 - `books` и `trades` с ненулевым числом сообщений, `snapshots >= 1`;
 - `gap_events == gaps_detected` (если не равны, логика расходится с реальностью, разбираем с Claude Code);
 - `crossed books: 0`;
-- задержка `recv-ts` порядка десятков миллисекунд; отрицательная значит расхождение часов (проверьте синхронизацию времени).
+- задержка `recv-ts` порядка 100-300 миллисекунд. Если она больше секунды или отрицательная,
+  запустите `python -m hftlab.netcheck`: он скажет, виноваты часы, сеть или процессор.
 
 Если подключение не открывается совсем, возможно, OKX недоступен с вашего IP или из вашей сети: это надо выяснить сразу,
 а запасной вариант (Gate) потребует переписать подключение и разбор стакана.
@@ -64,7 +65,7 @@ src/hftlab/paper.py          бумажная торговля
 src/hftlab/paper_compare.py  paper против симулятора
 src/hftlab/runs.py           журнал бэктестов (SQLite)
 src/hftlab/vault_export.py   экспорт журнала в Obsidian
-tests/                       65 тестов
+tests/                       67 тестов
 data/                        сырая запись (в git не попадает)
 processed/                   таблицы с признаками (в git не попадают, пересчитываются)
 results/                     журнал и логи paper (в git не попадают, бэкапить)

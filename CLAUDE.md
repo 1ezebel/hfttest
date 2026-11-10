@@ -27,7 +27,7 @@
 7. Spoofing/layering и манипуляции рынком не писать и не обсуждать как стратегию.
 
 ## Текущее состояние (код этапов 0-5 готов, данных пока мало)
-Покрыто тестами (65 шт., `python -m pytest`). Этап 0 закрыт на живой бирже 10.11.2026:
+Покрыто тестами (67 шт., `python -m pytest`). Этап 0 закрыт на живой бирже 10.11.2026:
 пропусков 0, crossed 0, независимый аудит стакана совпал уровень в уровень.
 
 Данные:
@@ -36,6 +36,7 @@
 - `recorder.py`: рекордер books+trades. Раз в 6 часов пересоздаёт подписку (`#RESUB`), раз в 30 минут
   берёт независимый snapshot вторым соединением (`#AUDIT`). Проверен на живой бирже.
 - `check_recording.py`: повторный проход записи: пропуски, crossed, задержка, точная сверка с `#AUDIT`.
+- `netcheck.py`: диагностика опоздания данных: часы компьютера, канал, процессор (40 секунд).
 - `health.py`: "жива ли запись" для cron/планировщика. `deploy/`: systemd-юнит и .bat для автозапуска.
 
 Исследование:
@@ -97,9 +98,10 @@
 ```
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt                          # зависимости + сам проект (`-e .`), иначе hftlab не импортируется
-python -m pytest                                         # тесты (65)
+python -m pytest                                         # тесты (67)
 python -m hftlab.recorder --out data                     # запись BTC+ETH (Ctrl+C для остановки)
 python -m hftlab.check_recording data                    # отчёт по записи
+python -m hftlab.netcheck                                # если latency в отчёте больше секунды
 python -m hftlab.health data                             # жива ли запись (код возврата 1 = проблема)
 python -m hftlab.features data --out processed           # сырьё -> parquet с признаками
 python -m hftlab.research processed --strategy mr_ema    # markout + walk-forward, пишет в журнал
