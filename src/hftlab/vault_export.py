@@ -9,6 +9,7 @@
     Home.md                     вход: сводка и ссылки
     Strategies/<имя>.md         заметка на стратегию: гипотеза, вывод, таблица ВСЕХ прогонов
     Runs/<run_id>.md            заметки только на важные прогоны (закреплённые + лучший OOS)
+    Assets/                     графики важных прогонов (копии из results/charts)
     Dashboards/*.base           панели Obsidian Bases (встроены в Obsidian 1.9+)
     Templates/Дневник.md        шаблон дневника, создаётся один раз
     Journal/                    сюда пишите дневник руками
@@ -25,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -162,6 +164,9 @@ def strategy_note(s: dict, runs: list[dict], noted: set[str]) -> tuple[dict, str
     return props, "\n".join(body)
 
 
+IMAGE_EXT = (".png", ".jpg", ".jpeg", ".svg")
+
+
 def run_note(r: dict, attempt_no: int, attempts_total: int) -> tuple[dict, str]:
     props = {
         "type": "hft-run",
@@ -193,8 +198,12 @@ def run_note(r: dict, attempt_no: int, attempts_total: int) -> tuple[dict, str]:
     ]
     if r["note"]:
         body += ["", "## Заметка при запуске", "", r["note"]]
-    if r["artifacts"]:
-        body += ["", "## Файлы", ""] + [f"- `{a}`" for a in r["artifacts"]]
+    images = [a for a in r["artifacts"] if a.lower().endswith(IMAGE_EXT)]
+    if images:  # картинки копируются в Assets/ и показываются прямо в заметке
+        body += ["", "## Графики", ""] + [f"![[Assets/{Path(a).name}]]" for a in images]
+    others = [a for a in r["artifacts"] if a not in images]
+    if others:
+        body += ["", "## Файлы", ""] + [f"- `{a}`" for a in others]
     return props, "\n".join(body)
 
 
@@ -280,6 +289,7 @@ tags: [hft, hft/journal]
 
 def export(db_path: str | Path, vault: str | Path) -> dict[str, int]:
     vault = Path(vault).expanduser()
+    project = Path(db_path).resolve().parent.parent
     stats = {"written": 0, "unchanged": 0, "skipped_manual": 0}
 
     def put(path: Path, text: str | None) -> None:
@@ -306,6 +316,15 @@ def export(db_path: str | Path, vault: str | Path) -> dict[str, int]:
         order = {r["run_id"]: i + 1 for i, r in enumerate(v)}
         for r in runs:
             if r["run_id"] in noted:
+                for art in r["artifacts"]:
+                    # пути графиков записаны относительно папки проекта (там же лежит results/)
+                    src = next((c for c in (Path(art), project / art) if c.is_file()), None)
+                    if src is not None and art.lower().endswith(IMAGE_EXT):
+                        dst = vault / "Assets" / src.name
+                        if not dst.exists() or dst.read_bytes() != src.read_bytes():
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copyfile(src, dst)
+                            stats["written"] += 1
                 props, body = run_note(r, order.get(r["run_id"], 0), len(v))
                 p = vault / "Runs" / f"{r['run_id']}.md"
                 put(p, render_note(p, props, body))

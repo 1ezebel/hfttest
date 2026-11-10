@@ -68,3 +68,21 @@ def test_walk_forward_on_noise_finds_nothing_and_logs_everything():
     assert [s for s in logged if s.startswith("wf-")] == ["wf-1", "wf-2", "wf-3"]
     for r in res:
         assert abs(r["test"]["t"]) < 4             # никакого "значимого" edge на шуме
+
+
+def test_decay_curve_finds_peak_and_half_life(tmp_path):
+    from hftlab.decay import decay_curve, plot
+    # после каждого сигнала цена 1 с растёт на 2 б.п., потом к 5 с возвращается обратно
+    n = 20000
+    mid = np.full(n, 100.0)
+    side = np.zeros(n, dtype=np.int8)
+    bump = np.r_[np.linspace(0, 2e-4, 11), np.linspace(2e-4, 0, 41)[1:]]
+    for i in range(100, n - 800, 800):
+        side[i] = 1
+        mid[i:i + len(bump)] *= 1 + bump
+    c = decay_curve(frame(mid), side)
+    assert c["peak_ms"] == 1000 and c["peak_bps"] == pytest.approx(2.0, rel=1e-2)
+    assert c["half_life_ms"] == 5000
+    assert decay_curve(frame(np.full(500, 100.0)), np.zeros(500, dtype=np.int8))["peak_ms"] is None
+    plot(c, "тест", tmp_path / "c.png")
+    assert (tmp_path / "c.png").stat().st_size > 5000

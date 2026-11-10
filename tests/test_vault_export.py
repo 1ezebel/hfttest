@@ -64,3 +64,20 @@ def test_second_export_is_noop(tmp_path):
     fill(db)
     export(db, vault)
     assert export(db, vault)["written"] == 0
+
+
+def test_chart_artifacts_are_copied_and_embedded(tmp_path):
+    db, vault = tmp_path / "results" / "runs.sqlite", tmp_path / "vault"
+    chart = tmp_path / "results" / "charts" / "decay.png"
+    chart.parent.mkdir(parents=True)
+    chart.write_bytes(b"png-bytes")
+    with RunDB(db) as d:
+        d.ensure_strategy("mr_a")
+        rid = d.log_run("mr_a", split="train", params={}, metrics={}, git=GIT,
+                        artifacts=["results/charts/decay.png", "results/paper/x.jsonl"])
+        d.pin_run(rid)
+    export(db, vault)
+    assert (vault / "Assets" / "decay.png").read_bytes() == b"png-bytes"
+    note = (vault / "Runs" / f"{rid}.md").read_text(encoding="utf-8")
+    assert "![[Assets/decay.png]]" in note and "`results/paper/x.jsonl`" in note
+    assert export(db, vault)["written"] == 0

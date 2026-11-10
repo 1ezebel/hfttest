@@ -2,4 +2,5 @@ websockets>=13
 numpy
 pandas>=2
 pyarrow
+matplotlib
 pytest

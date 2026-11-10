@@ -27,7 +27,7 @@
 7. Spoofing/layering и манипуляции рынком не писать и не обсуждать как стратегию.
 
 ## Текущее состояние (код этапов 0-5 готов, данных пока мало)
-Покрыто тестами (54 шт., `python -m pytest`). Этап 0 закрыт на живой бирже 10.11.2026:
+Покрыто тестами (56 шт., `python -m pytest`). Этап 0 закрыт на живой бирже 10.11.2026:
 пропусков 0, crossed 0, независимый аудит стакана совпал уровень в уровень.
 
 Данные:
@@ -41,6 +41,8 @@
 Исследование:
 - `features.py`: сырьё -> parquet (`processed/`): mid, microprice, imb1/imb5, OFI, объёмы сделок, `seg`.
 - `research.py`: сигналы (`mr_ema`, `micro_drift`), markout, издержки taker, walk-forward, контроль lag1.
+- `decay.py`: кривая затухания сигнала по горизонтам, peak и half-life, график в `results/charts/`
+  (графики закреплённых прогонов `vault_export` копирует в Obsidian и встраивает в заметку).
 - `sim.py`: симулятор пассивного исполнения (конец очереди, задержка, post-only, выход по рынку).
 - `runs.py` + `vault_export.py`: журнал бэктестов в SQLite и выгрузка в Obsidian.
 
@@ -74,12 +76,13 @@
 ```
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest                                         # тесты (54)
+python -m pytest                                         # тесты (56)
 python -m hftlab.recorder --out data                     # запись BTC+ETH (Ctrl+C для остановки)
 python -m hftlab.check_recording data                    # отчёт по записи
 python -m hftlab.health data                             # жива ли запись (код возврата 1 = проблема)
 python -m hftlab.features data --out processed           # сырьё -> parquet с признаками
 python -m hftlab.research processed --strategy mr_ema    # markout + walk-forward, пишет в журнал
+python -m hftlab.decay processed --strategy mr_ema --params '{"halflife_s": 5, "z_entry": 2}'   # затухание сигнала + график
 python -m hftlab.sim processed --strategy mr_ema         # симулятор исполнения, пишет в журнал
 python -m hftlab.paper --strategy mr_ema --params '{"halflife_s": 5, "z_entry": 2}' --minutes 60
 python -m hftlab.paper_compare results/paper/<файл>.jsonl
