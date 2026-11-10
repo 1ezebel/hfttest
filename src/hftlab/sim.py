@@ -96,7 +96,7 @@ def simulate(b: pd.DataFrame, t: pd.DataFrame, side: np.ndarray, cfg: SimConfig 
         # Состояние стакана, когда заявка дошла до биржи
         if (s > 0 and price >= ask[j]) or (s < 0 and price <= bid[j]):
             stats["rejected"] += 1  # post-only: пересекла бы спред
-            free_at = t_active
+            free_at = t_active + 1  # об отказе узнаём после момента прихода заявки
             continue
         stats["orders"] += 1
         if s > 0:
@@ -127,7 +127,7 @@ def simulate(b: pd.DataFrame, t: pd.DataFrame, side: np.ndarray, cfg: SimConfig 
                     fill_ts = t_ts[m]
                     break
         if fill_ts is None:
-            free_at = t_cancel
+            free_at = t_cancel + 1  # заявка снята только после момента отмены
             continue
 
         # Выход по рынку через hold_ms (+ задержка): продаём в бид / покупаем по аску

@@ -159,8 +159,16 @@ def time_folds(b: pd.DataFrame, n_chunks: int) -> list[pd.DataFrame]:
 def markout_scorer(horizon_ms: int) -> Callable[[pd.DataFrame, np.ndarray], dict[str, Any]]:
     """Оценщик для walk_forward: средний markout (до издержек) на горизонте horizon_ms."""
     def score(chunk: pd.DataFrame, side: np.ndarray) -> dict[str, Any]:
-        h = evaluate(chunk, side, (horizon_ms,))["horizons"][f"{horizon_ms}ms"]
-        return {"n": h["n"], "score": h["gross_bps"], **h}
+        key = f"{horizon_ms}ms"
+        h = evaluate(chunk, side, (horizon_ms,))["horizons"][key]
+        # Контроль на утечку будущего: тот же сигнал с опозданием на одну строку (~100 мс).
+        # Настоящий эффект ослабнет плавно. Если он пропадает полностью, сигнал
+        # подсматривал в ту же строку, и результату верить нельзя.
+        late = np.roll(side, 1)
+        late[0] = 0
+        late[np.r_[True, chunk["seg"].to_numpy()[1:] != chunk["seg"].to_numpy()[:-1]]] = 0
+        lag = evaluate(chunk, late, (horizon_ms,))["horizons"][key]
+        return {"n": h["n"], "score": h["gross_bps"], **h, "gross_lag1_bps": lag["gross_bps"]}
     return score
 
 
@@ -237,6 +245,7 @@ def main() -> int:
             "unit": "bps", "horizon_ms": a.horizon_ms, "n_trades": n,
             "mean_gross_bps": h["gross_bps"], "t_stat": h["t"],
             "mean_net_taker_bps": h["net_taker_bps"],
+            "mean_gross_lag1_bps": h.get("gross_lag1_bps"),
             "pnl_gross": None if h["gross_bps"] is None else h["gross_bps"] * n,
             "pnl_net": None if h["net_taker_bps"] is None else h["net_taker_bps"] * n,
             "fees": 2 * TAKER_FEE_BPS * n,
@@ -248,7 +257,7 @@ def main() -> int:
                    instruments=[a.inst])
 
     print(f"\nWalk-forward, горизонт {a.horizon_ms} мс, кусков {a.chunks}:")
-    print("  fold  params                               train_gross  test_n  test_gross  test_t  test_net_taker")
+    print("  fold  params                               train_gross  test_n  test_gross  test_t  lag1_gross  test_net_taker")
     tests = []
     for r in walk_forward(b, spec["fn"], spec["grid"], markout_scorer(a.horizon_ms), a.chunks,
                           on_result=log):
@@ -258,9 +267,11 @@ def main() -> int:
         t = r["test"]
         tests.append(t)
         print(f"  {r['fold']:>4}  {str(r['params']):<36} {_fmt(r['train']):>11}  {t['n']:>6}  "
-              f"{_fmt(t['gross_bps']):>10}  {_fmt(t['t'], 1):>6}  {_fmt(t['net_taker_bps']):>14}")
+              f"{_fmt(t['gross_bps']):>10}  {_fmt(t['t'], 1):>6}  {_fmt(t.get('gross_lag1_bps')):>10}  "
+              f"{_fmt(t['net_taker_bps']):>14}")
 
-    print(f"\nИздержки по рынку: спред + 2 x {TAKER_FEE_BPS} б.п. Если test_gross меньше этого,"
+    print("\nlag1_gross: тот же сигнал с опозданием на 100 мс (контроль на утечку будущего).")
+    print(f"Издержки по рынку: спред + 2 x {TAKER_FEE_BPS} б.п. Если test_gross меньше этого,"
           " taker-вариант убыточен; пассивный вариант проверяет симулятор (hftlab.sim).")
     if db:
         print(f"Всего вариантов в журнале по {a.strategy}: {db.count_runs(a.strategy)}")
