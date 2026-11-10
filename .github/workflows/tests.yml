@@ -1,8 +1,6 @@
 # Запускает все тесты при каждом изменении кода.
 name: tests
-on:
-  push:
-  pull_request:
+on: [push, pull_request]
 permissions:
   contents: read
 jobs:
