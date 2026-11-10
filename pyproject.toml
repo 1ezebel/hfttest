@@ -2,7 +2,7 @@
 name = "hftlab"
 version = "0.1.0"
 description = "Учебная лаборатория: запись рыночных данных OKX, стакан, исследование mean reversion"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = ["websockets>=13", "numpy", "pandas>=2", "pyarrow", "matplotlib"]
 
 [project.optional-dependencies]

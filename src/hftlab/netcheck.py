@@ -116,9 +116,15 @@ def main() -> int:
     insts = a.inst or ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
 
     print("1/2 часы и время запроса...")
-    offset, rtt = clock_offset()
-    print(f"    часы компьютера относительно биржи: {-offset:+.0f} мс (минус = отстают)")
-    print(f"    запрос туда-обратно: {rtt:.0f} мс")
+    rest_error = None
+    try:
+        offset, rtt = clock_offset()
+        print(f"    часы компьютера относительно биржи: {-offset:+.0f} мс (минус = отстают)")
+        print(f"    запрос туда-обратно: {rtt:.0f} мс")
+    except Exception as e:  # noqa: BLE001 - сам отказ и есть результат диагностики
+        rest_error, offset, rtt = e, 0.0, 0.0
+        print(f"    сайт биржи www.okx.com НЕ ОТВЕТИЛ за 15 с: {e}")
+        print("    часы проверить не удалось, опоздание ниже посчитано без поправки на часы")
     print(f"2/2 слушаю поток {a.seconds:.0f} с, ничего с ним не делая...")
     r = asyncio.run(stream_lag(a.url, insts, a.seconds, offset))
     print(f"    сообщений в секунду: {r['msgs_per_s']:.0f}, объём: {r['kb_per_s']:.0f} КБ/с, "
@@ -127,6 +133,10 @@ def main() -> int:
     print(f"    опоздание (с поправкой на часы): в начале {f(r['lag_first_ms'])} мс, "
           f"в конце {f(r['lag_last_ms'])} мс, минимум {f(r['lag_min_ms'])} мс")
     print()
+    if rest_error is not None:
+        print("ДОСТУП: обычный запрос к www.okx.com не проходит. Откройте https://www.okx.com в браузере: "
+              "если сайт не открывается или грузится очень долго, ваша сеть плохо пропускает OKX. "
+              "Тогда запись с этого компьютера ненадёжна, нужен другой канал или VPS.")
     for line in verdict(offset, rtt, r):
         print(line)
     return 0
