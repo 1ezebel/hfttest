@@ -1,0 +1,25 @@
+# Автозапуск рекордера на Linux (VPS). Установка:
+#   1. Поправьте User и два пути ниже под себя.
+#   2. sudo cp deploy/hftlab-recorder.service /etc/systemd/system/
+#   3. sudo systemctl daemon-reload && sudo systemctl enable --now hftlab-recorder
+# Лог:    journalctl -u hftlab-recorder -f
+# Статус: systemctl status hftlab-recorder
+[Unit]
+Description=hft-lab OKX recorder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=hft
+WorkingDirectory=/home/hft/hft-lab
+Environment=PYTHONPATH=/home/hft/hft-lab/src
+ExecStart=/home/hft/hft-lab/.venv/bin/python -m hftlab.recorder --out data
+# Упал по любой причине: поднять снова через 5 секунд
+Restart=always
+RestartSec=5
+# Ctrl+C-подобная остановка, чтобы рекордер успел закрыть файлы
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

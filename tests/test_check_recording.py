@@ -71,3 +71,32 @@ def test_replay_counts_and_detects_gap(tmp_path):
     assert rep.crossed == 0
     assert len(rep.latencies_ms) == 5
     assert all(abs(x - 0.0) < 1e-6 or x > 0 for x in rep.latencies_ms)  # recv не раньше ts
+
+
+def _snap(seq, bids, asks, ts=1000):
+    return json.dumps({"arg": {"channel": "books", "instId": "X"}, "action": "snapshot",
+                       "data": [{"bids": bids, "asks": asks, "ts": str(ts), "prevSeqId": -1, "seqId": seq}]})
+
+
+def _upd(seq, prev, bids, asks, ts=1000):
+    return json.dumps({"arg": {"channel": "books", "instId": "X"}, "action": "update",
+                       "data": [{"bids": bids, "asks": asks, "ts": str(ts), "prevSeqId": prev, "seqId": seq}]})
+
+
+def test_audit_ok_bad_pending_and_unmatched():
+    from hftlab.check_recording import replay
+    b, a = [["100", "1", "0", "1"]], [["101", "2", "0", "1"]]
+    lines = [
+        (1, "#CONNECT"),
+        (2, _snap(10, b, a)),
+        (3, "#AUDIT " + _snap(10, [["100.0", "1.00", "0", "1"]], a)),   # тот же стакан, иная запись чисел
+        (4, "#AUDIT " + _snap(12, [["100", "7", "0", "1"]], a)),        # из будущего: ждёт seq 12
+        (5, _upd(12, 10, [["100", "7", "0", "1"]], [])),                 # дошли: совпало
+        (6, _upd(13, 12, [["100", "9", "0", "1"]], [])),
+        (7, "#AUDIT " + _snap(12, [["100", "8", "0", "1"]], a)),        # прошлое состояние, размер не тот
+        (8, "#AUDIT " + _snap(5, b, a)),                                 # такого seq у нас не было
+        (9, "#RESUB"),
+    ]
+    rep = replay(lines, "X")
+    assert rep.audits == 4 and rep.resub_events == 1
+    assert (rep.audit_ok, rep.audit_bad, rep.audit_unmatched) == (2, 1, 1)
