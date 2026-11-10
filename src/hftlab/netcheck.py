@@ -72,7 +72,14 @@ async def stream_lag(url: str, insts: list[str], seconds: float, offset_ms: floa
         cpu = time.process_time() - cpu0
     first = [l for s, l in lags if s < elapsed / 3]
     last = [l for s, l in lags if s > elapsed * 2 / 3]
+    # Опоздание по десяти равным отрезкам времени: видно, растёт оно или стоит на месте
+    step = elapsed / 10
+    timeline = []
+    for k in range(10):
+        part = [l for s, l in lags if k * step <= s < (k + 1) * step]
+        timeline.append(statistics.median(part) if part else None)
     return {
+        "timeline_ms": timeline, "step_s": step,
         "seconds": elapsed, "msgs_per_s": n_msgs / elapsed, "kb_per_s": n_bytes / elapsed / 1024,
         "cpu_share": cpu / elapsed,
         "lag_first_ms": statistics.median(first) if first else None,
@@ -90,13 +97,16 @@ def verdict(offset_ms: float, rtt_ms: float, r: dict) -> list[str]:
     first, last = r["lag_first_ms"], r["lag_last_ms"]
     if first is None or last is None:
         return out + ["ПОТОК: сообщений не пришло, проверить нечем."]
-    if last - first > 1000:
+    # рост опоздания в секундах за секунду записи: 0.01 = за час набежит 36 секунд
+    slope = (last - first) / 1000 / (r["seconds"] * 2 / 3)
+    if slope > 0.005 and last - first > 300:
         if r["cpu_share"] > 0.7:
             out.append("ПРОЦЕССОР: программа занята почти всё время и не успевает за потоком. "
                        "Закройте тяжёлые программы или запишите меньше инструментов.")
         else:
             out.append(f"КАНАЛ: опоздание выросло с {first / 1000:.1f} до {last / 1000:.1f} с за "
-                       f"{r['seconds']:.0f} с, хотя программа простаивала. Поток не пролезает через сеть: "
+                       f"{r['seconds']:.0f} с (за час набежит около {slope * 3600:.0f} с), хотя программа "
+                       "простаивала. Поток не пролезает через сеть: "
                        "отключите VPN/прокси, попробуйте кабель вместо Wi-Fi или другую сеть. "
                        "Если не поможет, записывать нужно с VPS.")
     elif last > 1000:
@@ -132,6 +142,9 @@ def main() -> int:
     f = lambda v: "-" if v is None else f"{v:.0f}"  # noqa: E731
     print(f"    опоздание (с поправкой на часы): в начале {f(r['lag_first_ms'])} мс, "
           f"в конце {f(r['lag_last_ms'])} мс, минимум {f(r['lag_min_ms'])} мс")
+    print("    опоздание по ходу замера, мс: "
+          + "  ".join("-" if v is None else f"{v:.0f}" for v in r["timeline_ms"])
+          + f"   (шаг {r['step_s']:.0f} с)")
     print()
     if rest_error is not None:
         print("ДОСТУП: обычный запрос к www.okx.com не проходит. Откройте https://www.okx.com в браузере: "

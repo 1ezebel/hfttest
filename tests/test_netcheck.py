@@ -12,6 +12,8 @@ def test_verdicts():
     assert verdict(20, 150, OK)[0].startswith("ВСЁ В ПОРЯДКЕ")
     assert verdict(1400, 150, OK)[0].startswith("ЧАСЫ") and "отстают" in verdict(1400, 150, OK)[0]
     assert "спешат" in verdict(-900, 150, OK)[0]
+    slow = verdict(0, 150, {**OK, "lag_first_ms": 1906.0, "lag_last_ms": 2445.0})[0]   # +0.5 с за 30 с
+    assert slow.startswith("КАНАЛ") and "за час" in slow
     growing = {**OK, "lag_first_ms": 2000.0, "lag_last_ms": 20000.0}
     assert verdict(0, 150, growing)[0].startswith("КАНАЛ")
     assert verdict(0, 150, {**growing, "cpu_share": 0.95})[0].startswith("ПРОЦЕССОР")
