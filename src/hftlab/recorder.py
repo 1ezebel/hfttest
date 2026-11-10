@@ -35,9 +35,9 @@ import websockets
 from hftlab.okx_book import OrderBook, Status
 from hftlab.storage import HourlyWriter
 
-URL = "wss://ws.okx.com:8443/ws/v5/public"
-# Тот же сервер слушает и 443: пригодится, если сеть/прокси режет нестандартный порт 8443
-URL_443 = "wss://ws.okx.com:443/ws/v5/public"
+# Порт 443. Старый порт 8443 OKX выводит из работы: сервер сам шлёт уведомление
+# "WebSocket port 8443 will be retired soon. Please migrate to port 443" (замечено 10.11.2026).
+URL = "wss://ws.okx.com:443/ws/v5/public"
 PING_EVERY_S = 20
 SILENCE_TIMEOUT_S = 30
 FLUSH_EVERY_S = 5
@@ -200,7 +200,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description="OKX public data recorder (books + trades)")
     p.add_argument("--inst", action="append", help="instId, можно несколько раз")
     p.add_argument("--out", default="data", help="папка для записи")
-    p.add_argument("--url", default=URL, help=f"адрес WS; если 8443 закрыт: {URL_443}")
+    p.add_argument("--url", default=URL, help="адрес публичного WebSocket OKX")
     p.add_argument("--resub-hours", type=float, default=RESUB_EVERY_S / 3600,
                    help="как часто пересоздавать подписку на books (страховка)")
     p.add_argument("--audit-minutes", type=float, default=AUDIT_EVERY_S / 60,

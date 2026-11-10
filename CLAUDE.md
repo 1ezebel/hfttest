@@ -81,8 +81,8 @@
 - Комиссии в `research.py` (maker 2 / taker 5 б.п.) это базовый тариф; тариф пользователя не проверен.
 
 ## Факты про OKX, на которые опирается код (проверять при сомнениях)
-- Публичный WS: `wss://ws.okx.com:8443/ws/v5/public` (тот же сервер отвечает на порту 443: `--url wss://ws.okx.com:443/ws/v5/public`,
-  нужно, если сеть режет 8443), каналы `books` (400 уровней, snapshot, затем updates) и `trades`.
+- Публичный WS: `wss://ws.okx.com:443/ws/v5/public` (порт 8443 OKX выводит из работы, сервер шлёт об этом
+  notice с кодом 64010; по умолчанию в коде уже 443), каналы `books` (400 уровней, snapshot, затем updates) и `trades`.
 - **Поле `checksum` в `books` отключено** (в продакшене с 23.06.2026 всегда 0). Целостность = `prevSeqId == прошлый seqId`.
   `books5` и `bbo-tbt` checksum не имели вообще.
 - Для `books`: snapshot имеет `prevSeqId = -1`; `size == "0"` удаляет уровень; пустой update при `prevSeqId == seqId` это heartbeat.
