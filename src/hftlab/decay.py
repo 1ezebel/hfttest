@@ -7,7 +7,7 @@
 набирает силу 10 секунд, можно исполнять спокойно.
 
 Таблица и график показывают средний markout (до издержек) на горизонтах от 100 мс до 60 с.
-  peak        горизонт, на котором эффект максимален
+  peak        горизонт, на котором эффект максимален (только среди точек с t >= 2, остальное шум)
   half-life   первый горизонт после пика, где эффект упал вдвое (или "не затух")
 
 Важно: кривая строится по ВСЕМ данным с заранее заданными параметрами. Это описание
@@ -26,6 +26,7 @@ from hftlab.features import load
 from hftlab.research import STRATEGIES, TAKER_FEE_BPS, _day, _fmt, evaluate
 from hftlab.runs import RunDB
 
+MIN_T = 2.0
 HORIZONS_MS = (100, 200, 500, 1000, 2000, 5000, 10000, 30000, 60000)
 
 
@@ -33,7 +34,9 @@ def decay_curve(b, side: np.ndarray, horizons_ms=HORIZONS_MS) -> dict[str, Any]:
     ev = evaluate(b, side, horizons_ms)["horizons"]
     rows = [{"horizon_ms": h, **ev[f"{h}ms"]} for h in horizons_ms]
     valid = [r for r in rows if r["gross_bps"] is not None]
-    peak = max(valid, key=lambda r: r["gross_bps"]) if valid else None
+    # Пиком считаем только статистически заметную точку (t >= MIN_T), иначе это шум
+    solid = [r for r in valid if r["gross_bps"] > 0 and r["n"] >= 2 and (r["t"] is None or r["t"] >= MIN_T)]
+    peak = max(solid, key=lambda r: r["gross_bps"]) if solid else None
     half = None
     if peak is not None and peak["gross_bps"] > 0:
         after = [r for r in valid if r["horizon_ms"] > peak["horizon_ms"]]
@@ -110,7 +113,7 @@ def main() -> int:
         print(f"  {_label(r['horizon_ms']):>8}  {r['n']:>6}  {_fmt(r['gross_bps']):>10}  {_fmt(r['t'], 1):>5}")
     hl = "не затух за 60 с" if c["half_life_ms"] is None else _label(c["half_life_ms"])
     if c["peak_ms"] is None or c["peak_bps"] <= 0:
-        print("  положительного эффекта нет ни на одном горизонте")
+        print("  заметного положительного эффекта нет ни на одном горизонте")
     else:
         print(f"  peak: {_label(c['peak_ms'])} ({c['peak_bps']:.3f} б.п.), half-life: {hl}")
     if a.no_log:
