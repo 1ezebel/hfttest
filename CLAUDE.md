@@ -27,7 +27,7 @@
 7. Spoofing/layering и манипуляции рынком не писать и не обсуждать как стратегию.
 
 ## Текущее состояние (код этапов 0-5 готов, данных пока мало)
-Покрыто тестами (64 шт., `python -m pytest`). Этап 0 закрыт на живой бирже 10.11.2026:
+Покрыто тестами (65 шт., `python -m pytest`). Этап 0 закрыт на живой бирже 10.11.2026:
 пропусков 0, crossed 0, независимый аудит стакана совпал уровень в уровень.
 
 Данные:
@@ -46,6 +46,7 @@
 - `sim.py`: симулятор пассивного исполнения (конец очереди, задержка, post-only). Выход: `--exit taker`
   (по рынку) или `--exit maker` (лимитной заявкой на противоположной стороне, по таймауту `--exit-ttl-ms`
   всё равно по рынку). Пассивный выход пишется в журнал отдельной стратегией `<имя>_maker_px`.
+- `universe.py`: сканер фьючерсов OKX: тик и спред в б.п. против комиссий, оборот (публичный REST).
 - `runs.py` + `vault_export.py`: журнал бэктестов в SQLite и выгрузка в Obsidian.
 
 Исполнение (без реальных денег):
@@ -71,6 +72,9 @@
   где спред в б.п. шире комиссии (дешёвые альты с крупным тиком), (б) тариф с низкой или нулевой
   maker-комиссией, (в) сигналы на горизонтах, где движение заметно больше 4 б.п. Обсудить с пользователем
   до того, как тратить неделю записи только на BTC/ETH.
+  Снимок `hftlab.universe` 10.11.2026: из 528 USDT-фьючерсов тик шире 4 б.п. при обороте от 20 млн USDT
+  только у TRUMP (8.9 б.п.) и ADA (5.7 б.п.); при обороте от 5 млн таких 11. Это один снимок, перепроверять.
+  Широкий тик означает длинную очередь и сильный adverse selection: это повод записать и проверить, не вывод.
 - Около 160 первых прогонов в журнале помечены git_dirty: в git случайно лежала `processed/`. Код при этом
   был закоммичен, на результаты это не влияет.
 - Настоящего шлюза к бирже нет и быть не должно до закрытия этапа 5 (2 недели paper).
@@ -93,7 +97,7 @@
 ```
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest                                         # тесты (64)
+python -m pytest                                         # тесты (65)
 python -m hftlab.recorder --out data                     # запись BTC+ETH (Ctrl+C для остановки)
 python -m hftlab.check_recording data                    # отчёт по записи
 python -m hftlab.health data                             # жива ли запись (код возврата 1 = проблема)
@@ -102,6 +106,7 @@ python -m hftlab.research processed --strategy mr_ema    # markout + walk-forwar
 python -m hftlab.decay processed --strategy mr_ema --params '{"halflife_s": 5, "z_entry": 2}'   # затухание сигнала + график
 python -m hftlab.sim processed --strategy mr_ema         # симулятор исполнения, пишет в журнал
 python -m hftlab.sim processed --strategy mr_ema --exit maker   # то же с пассивным выходом
+python -m hftlab.universe                                # у каких фьючерсов спред шире комиссий
 python -m hftlab.paper --strategy mr_ema --params '{"halflife_s": 5, "z_entry": 2}' --minutes 60
 python -m hftlab.paper_compare results/paper/<файл>.jsonl
 python -m hftlab.vault_export --vault "<путь к хранилищу Obsidian>/hft-lab"   # журнал -> Obsidian

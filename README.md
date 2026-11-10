@@ -12,7 +12,7 @@
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest                 # должно быть 64 passed
+python -m pytest                 # должно быть 65 passed
 ```
 
 ## Первый запуск рекордера (делается руками, один раз)
@@ -59,12 +59,13 @@ src/hftlab/features.py       признаки -> parquet
 src/hftlab/research.py       сигналы, markout, walk-forward
 src/hftlab/decay.py          затухание сигнала (half-life) с графиком
 src/hftlab/sim.py            симулятор пассивного исполнения
+src/hftlab/universe.py       у каких фьючерсов спред шире комиссий
 src/hftlab/oms.py            ордера, лимиты риска, kill switch
 src/hftlab/paper.py          бумажная торговля
 src/hftlab/paper_compare.py  paper против симулятора
 src/hftlab/runs.py           журнал бэктестов (SQLite)
 src/hftlab/vault_export.py   экспорт журнала в Obsidian
-tests/                       64 теста
+tests/                       65 тестов
 data/                        сырая запись (в git не попадает)
 processed/                   таблицы с признаками (в git не попадают, пересчитываются)
 results/                     журнал и логи paper (в git не попадают, бэкапить)
