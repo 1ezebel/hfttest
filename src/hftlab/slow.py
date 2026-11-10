@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import math
+from statistics import NormalDist
 from typing import Any, Callable
 
 import numpy as np
@@ -193,10 +194,29 @@ def _day(ms: float) -> str:
     return pd.Timestamp(ms, unit="ms", tz="UTC").strftime("%Y-%m-%d %H:%M")
 
 
+def pooled_summary(per_inst: dict[str, np.ndarray]) -> dict[str, Any]:
+    """Сводка тестовых сделок по инструментам и вместе, с порогом t на множественные проверки.
+
+    Порог Бонферрони: при k независимых проверках "значимым" считаем только |t| выше порога
+    для уровня 5% / k. Инструменты крипторынка сильно двигаются вместе, поэтому общий t
+    завышает независимость выборки: относиться к нему как к верхней оценке.
+    """
+    rows = []
+    for inst, g in per_inst.items():
+        s = summarize(g)
+        rows.append({"inst": inst, "n": s["n"], "mean": s["mean"], "t": s["t"]})
+    parts = [g for g in per_inst.values() if len(g)]
+    allg = np.concatenate(parts) if parts else np.array([])
+    tot = summarize(allg)
+    k = max(len(per_inst), 1)
+    return {"rows": rows, "n": tot["n"], "mean": tot["mean"], "t": tot["t"],
+            "t_threshold": NormalDist().inv_cdf(1 - 0.05 / (2 * k)), "k": k}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Возврат к среднему / импульс на свечах, walk-forward")
     ap.add_argument("--bars", default="bars", help="папка со свечами (hftlab.candles)")
-    ap.add_argument("--inst", default="BTC-USDT-SWAP")
+    ap.add_argument("--inst", action="append", help="инструмент, можно несколько раз")
     ap.add_argument("--bar", default="15m", choices=sorted(BAR_MS), help="размер свечи для сигнала")
     ap.add_argument("--strategy", choices=sorted(STRATEGIES), default="mr_bars")
     ap.add_argument("--cost-bps", type=float, default=20.0,
@@ -205,58 +225,75 @@ def main() -> int:
     ap.add_argument("--min-n", type=int, default=30, help="минимум сделок на train, чтобы вариант мог победить")
     ap.add_argument("--db", default="results/runs.sqlite")
     ap.add_argument("--no-log", action="store_true", help="не писать в журнал (только отладка кода)")
+    ap.add_argument("--quiet", action="store_true", help="печатать только сводку по инструментам")
     a = ap.parse_args()
-
-    base = load(a.bars, a.inst, "5m")
-    bars = resample(base, "5m", a.bar)
-    bar_ms = BAR_MS[a.bar]
-    spec = STRATEGIES[a.strategy]
-    days = (bars["ts_ms"].iloc[-1] - bars["ts_ms"].iloc[0]) / 86_400_000
-    print(f"{a.inst} {a.bar}: {len(bars)} свечей, {days:.0f} дней, дыр в 5m: {len(gaps(base, '5m'))}, "
-          f"стратегия {a.strategy}, стоимость круга {a.cost_bps:g} б.п.")
+    insts = a.inst or ["BTC-USDT-SWAP"]
+    bar_ms, spec = BAR_MS[a.bar], STRATEGIES[a.strategy]
 
     db = None if a.no_log else RunDB(a.db)
     if db:
         db.ensure_strategy(a.strategy, hypothesis=spec["hypothesis"])
 
-    def log(split: str, params: dict, m: dict, rng: tuple[int, int]) -> None:
-        if db is None:
-            return
-        metrics = {k: v for k, v in m.items() if k != "gross"}
-        metrics.update(unit="bps", kind="bars", bar=a.bar, cost_bps=a.cost_bps, n_trades=m["n"],
-                       pnl_gross=m["sum_gross_bps"], pnl_net=m["sum_net_bps"], fees=m["fees_bps"],
-                       execution="signal at bar close, fill at next bar open, exit hold bars later")
-        db.log_run(a.strategy, split=split, params={**params, "bar": a.bar}, metrics=metrics,
-                   data_from=_day(bars["ts_ms"].iloc[rng[0]]), data_to=_day(bars["ts_ms"].iloc[rng[1] - 1]),
-                   instruments=[a.inst])
+    per_inst: dict[str, np.ndarray] = {}
+    for inst in insts:
+        base = load(a.bars, inst, "5m")
+        bars = resample(base, "5m", a.bar)
+        days = (bars["ts_ms"].iloc[-1] - bars["ts_ms"].iloc[0]) / 86_400_000
+        if not a.quiet:
+            print(f"{inst} {a.bar}: {len(bars)} свечей, {days:.0f} дней, дыр в 5m: {len(gaps(base, '5m'))}, "
+                  f"стратегия {a.strategy}, стоимость круга {a.cost_bps:g} б.п.")
 
-    res = walk_forward_bars(bars, bar_ms, spec["flip"], a.cost_bps, a.chunks, a.min_n, on_result=log)
+        def log(split: str, params: dict, m: dict, rng: tuple[int, int], bars=bars, inst=inst) -> None:
+            if db is None:
+                return
+            metrics = {k: v for k, v in m.items() if k != "gross"}
+            metrics.update(unit="bps", kind="bars", bar=a.bar, cost_bps=a.cost_bps, n_trades=m["n"],
+                           pnl_gross=m["sum_gross_bps"], pnl_net=m["sum_net_bps"], fees=m["fees_bps"],
+                           execution="signal at bar close, fill at next bar open, exit hold bars later")
+            db.log_run(a.strategy, split=split, params={**params, "bar": a.bar}, metrics=metrics,
+                       data_from=_day(bars["ts_ms"].iloc[rng[0]]), data_to=_day(bars["ts_ms"].iloc[rng[1] - 1]),
+                       instruments=[inst])
 
-    print("\n  fold  params                                         train_net  n   gross   t   plac_p   net")
-    tests = []
-    for r in res:
-        if r["params"] is None:
-            print(f"  {r['fold']:>4}  (на train не набралось {a.min_n} сделок ни у одного варианта)")
-            continue
-        t = r["test"]
-        tests.append(t["gross"])
-        print(f"  {r['fold']:>4}  {str(r['params']):<46} {_fmt(r['train_net']):>8} {t['n']:>4} "
-              f"{_fmt(t['mean_gross_bps']):>7} {_fmt(t['t'], 1):>5} {_fmt(t['placebo_p']):>7} "
-              f"{_fmt(t['mean_net_bps']):>6}")
+        res = walk_forward_bars(bars, bar_ms, spec["flip"], a.cost_bps, a.chunks, a.min_n, on_result=log)
+        tests = []
+        if not a.quiet:
+            print("\n  fold  params                                         train_net  n   gross   t   plac_p   net")
+        for r in res:
+            if r["params"] is None:
+                if not a.quiet:
+                    print(f"  {r['fold']:>4}  (на train не набралось {a.min_n} сделок ни у одного варианта)")
+                continue
+            t = r["test"]
+            tests.append(t["gross"])
+            if not a.quiet:
+                print(f"  {r['fold']:>4}  {str(r['params']):<46} {_fmt(r['train_net']):>8} {t['n']:>4} "
+                      f"{_fmt(t['mean_gross_bps']):>7} {_fmt(t['t'], 1):>5} {_fmt(t['placebo_p']):>7} "
+                      f"{_fmt(t['mean_net_bps']):>6}")
+        per_inst[inst] = np.concatenate(tests) if tests else np.array([])
 
-    if tests:
-        g = np.concatenate(tests)
-        s = summarize(g)
-        print(f"\nВсе тестовые куски вместе: сделок {s['n']}, средний результат до издержек "
-              f"{_fmt(s['mean'])} б.п., t = {_fmt(s['t'], 1)}")
-        print("Результат на сделку после издержек при разной стоимости круга:")
-        for c in COSTS_BPS:
-            print(f"   {c:>4.0f} б.п.: {_fmt(s['mean'] - c) if s['mean'] is not None else '-':>7}")
-        be = s["mean"]
-        if be is not None and be > 0:
-            print(f"Безубыточная стоимость круга: {be:.1f} б.п. Если ваша выше, стратегия убыточна.")
-        else:
-            print("До издержек результат не положительный: на этих данных сигнал не работает.")
+        if len(insts) == 1 and tests:
+            g = per_inst[inst]
+            s = summarize(g)
+            print(f"\nВсе тестовые куски вместе: сделок {s['n']}, средний результат до издержек "
+                  f"{_fmt(s['mean'])} б.п., t = {_fmt(s['t'], 1)}")
+            print("Результат на сделку после издержек при разной стоимости круга:")
+            for c in COSTS_BPS:
+                print(f"   {c:>4.0f} б.п.: {_fmt(s['mean'] - c) if s['mean'] is not None else '-':>7}")
+            be = s["mean"]
+            if be is not None and be > 0:
+                print(f"Безубыточная стоимость круга: {be:.1f} б.п. Если ваша выше, стратегия убыточна.")
+            else:
+                print("До издержек результат не положительный: на этих данных сигнал не работает.")
+
+    if len(insts) > 1:
+        ps = pooled_summary(per_inst)
+        print(f"\n{a.strategy}, свечи {a.bar}, стоимость круга {a.cost_bps:g} б.п.: только тестовые куски walk-forward")
+        print("  инструмент              сделок   до издержек, б.п.     t")
+        for r in ps["rows"]:
+            print(f"  {r['inst']:<22} {r['n']:>7} {_fmt(r['mean']):>13} {_fmt(r['t'], 1):>12}")
+        print(f"  {'ВМЕСТЕ':<22} {ps['n']:>7} {_fmt(ps['mean']):>13} {_fmt(ps['t'], 1):>12}")
+        print(f"  Порог значимости для {ps['k']} проверок: |t| > {ps['t_threshold']:.1f} "
+              "(инструменты двигаются вместе, общий t завышен)")
     if db:
         n = db.count_runs(a.strategy)
         print(f"\nВсего вариантов в журнале по {a.strategy}: {n}. Лучший из многих выглядит лучше, чем есть: "

@@ -104,3 +104,14 @@ def test_walk_forward_finds_real_reversion_before_costs():
     res = walk_forward_bars(frame(ou(40000, 0.05, seed=6)), BAR, flip=False, cost_bps=0, n_chunks=3,
                             min_n=20, grid=grid)
     assert all(r["test"]["mean_gross_bps"] > 0 and r["test"]["placebo_p"] < 0.05 for r in res)
+
+
+def test_pooled_summary_threshold_grows_with_number_of_tests():
+    from hftlab.slow import pooled_summary
+    rng = np.random.default_rng(0)
+    one = pooled_summary({"A": rng.normal(0, 10, 100)})
+    eight = pooled_summary({f"I{i}": rng.normal(0, 10, 100) for i in range(8)})
+    assert one["t_threshold"] == pytest.approx(1.96, abs=0.01)     # одна проверка: обычные 5%
+    assert eight["t_threshold"] > 2.6 and eight["n"] == 800        # восемь проверок: порог строже
+    assert [r["inst"] for r in eight["rows"]] == [f"I{i}" for i in range(8)]
+    assert pooled_summary({"A": np.array([])})["n"] == 0           # пустой инструмент не ломает сводку
