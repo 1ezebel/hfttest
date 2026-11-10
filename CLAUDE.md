@@ -96,7 +96,7 @@
 ## Команды
 ```
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt                          # зависимости + сам проект (`-e .`), иначе hftlab не импортируется
 python -m pytest                                         # тесты (65)
 python -m hftlab.recorder --out data                     # запись BTC+ETH (Ctrl+C для остановки)
 python -m hftlab.check_recording data                    # отчёт по записи

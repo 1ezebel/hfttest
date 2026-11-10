@@ -11,7 +11,7 @@
 ```
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt  # ставит зависимости и сам проект (папку src)
 python -m pytest                 # должно быть 65 passed
 ```
 
