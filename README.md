@@ -12,7 +12,7 @@
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt  # ставит зависимости и сам проект (папку src)
-python -m pytest                 # должно быть 81 passed
+python -m pytest                 # должно быть 93 passed
 ```
 
 ## Первый запуск рекордера (делается руками, один раз)
@@ -61,13 +61,15 @@ src/hftlab/decay.py          затухание сигнала (half-life) с г
 src/hftlab/sim.py            симулятор пассивного исполнения
 src/hftlab/universe.py       у каких фьючерсов спред шире комиссий
 src/hftlab/candles.py        история свечей OKX
-src/hftlab/slow.py           медленные стратегии на свечах (возврат к среднему, импульс)
+src/hftlab/slow.py           стратегии на свечах: возврат к среднему, импульс, фильтр волатильности, базис
+src/hftlab/funding.py        плата за финансирование: данные, сигнал, спот против фьючерса
+docs/PREREG-*.md             планы проверок, записанные до запуска
 src/hftlab/oms.py            ордера, лимиты риска, kill switch
 src/hftlab/paper.py          бумажная торговля
 src/hftlab/paper_compare.py  paper против симулятора
 src/hftlab/runs.py           журнал бэктестов (SQLite)
 src/hftlab/vault_export.py   экспорт журнала в Obsidian
-tests/                       81 тест
+tests/                       93 теста
 data/                        сырая запись (в git не попадает)
 processed/                   таблицы с признаками (в git не попадают, пересчитываются)
 results/                     журнал и логи paper (в git не попадают, бэкапить)
