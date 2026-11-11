@@ -32,7 +32,10 @@ import pandas as pd
 
 BASE = "https://www.okx.com"
 BAR_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
-          "1H": 3_600_000, "4H": 14_400_000}
+          "1H": 3_600_000, "4H": 14_400_000, "1D": 86_400_000}
+# Имя интервала в API OKX. Дневные свечи берём с границей в полночь UTC ("1Dutc"),
+# а не по гонконгскому времени ("1D"), чтобы они совпадали с остальными данными.
+OKX_BAR = {"1D": "1Dutc"}
 COLS = ["ts_ms", "open", "high", "low", "close", "vol", "quote_vol"]
 
 GetPage = Callable[[str, str, int | None], list[list[str]]]
@@ -40,7 +43,7 @@ GetPage = Callable[[str, str, int | None], list[list[str]]]
 
 def default_get(inst: str, bar: str, after: int | None, retries: int = 6) -> list[list[str]]:
     """Одна страница (до 100 свечей, от новых к старым). `after`: вернуть свечи старше этого ts."""
-    url = f"{BASE}/api/v5/market/history-candles?instId={inst}&bar={bar}&limit=100"
+    url = f"{BASE}/api/v5/market/history-candles?instId={inst}&bar={OKX_BAR.get(bar, bar)}&limit=100"
     if after is not None:
         url += f"&after={after}"
     delay = 1.0
